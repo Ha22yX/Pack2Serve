@@ -10,7 +10,13 @@ from pathlib import Path
 from pack2serve.builder import ServerBuilder
 from pack2serve.cli import main
 from pack2serve.downloader import ArtifactCache, CurseForgeTemplateMirrorProvider, ModrinthDirectProvider
-from pack2serve.java import java_status, required_java_major
+from pack2serve.java import (
+    JavaInstaller,
+    JavaRuntimeInstallPlan,
+    create_java_runtime_install_plan,
+    java_status,
+    required_java_major,
+)
 from pack2serve.loader import LoaderInstallPlan, create_loader_install_plan
 from pack2serve.installer import LoaderInstaller
 from pack2serve.parser import ModpackFormat, parse_modpack
@@ -108,6 +114,77 @@ class Pack2ServeCoreTests(unittest.TestCase):
         self.assertEqual(java_status(17, 8), "too-old")
         self.assertEqual(java_status(17, 17), "ok")
         self.assertEqual(java_status(8, 26), "newer-than-recommended")
+
+    def test_java_runtime_install_plan_uses_adoptium_archive_for_windows(self) -> None:
+        plan = create_java_runtime_install_plan(17, os_name="Windows", machine="AMD64")
+
+        self.assertEqual(plan.required_major, 17)
+        self.assertEqual(plan.os, "windows")
+        self.assertEqual(plan.arch, "x64")
+        self.assertIn("api.adoptium.net", plan.download_url)
+        self.assertIn("/17/", plan.download_url)
+        self.assertIn("/windows/x64/jre/", plan.download_url)
+        self.assertEqual(plan.archive_path, "pack2serve/java/jre-17-windows-x64.zip")
+        self.assertEqual(plan.java_executable, "pack2serve/runtime/java/bin/java.exe")
+
+    def test_java_installer_extracts_archive_and_rewrites_start_script(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            tmp_path = Path(temp)
+            archive_path = tmp_path / "jre.zip"
+            with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED) as archive:
+                archive.writestr("jdk-17/bin/java.exe", b"fake-java")
+                archive.writestr("jdk-17/release", "JAVA_VERSION=\"17\"\n")
+            server_dir = tmp_path / "server"
+            (server_dir / "pack2serve").mkdir(parents=True)
+            (server_dir / "start.ps1").write_text(
+                "$ErrorActionPreference = 'Stop'\n"
+                "$java = 'java'\n"
+                "& $java -jar 'server.jar' nogui\n",
+                encoding="utf-8",
+            )
+            plan = JavaRuntimeInstallPlan(
+                required_major=17,
+                os="windows",
+                arch="x64",
+                kind="adoptium-jre-archive",
+                download_url=archive_path.as_uri(),
+                archive_path="pack2serve/java/jre.zip",
+                install_dir="pack2serve/runtime/java",
+                java_executable="pack2serve/runtime/java/bin/java.exe",
+                notes=[],
+            )
+
+            result = JavaInstaller().install(server_dir, plan)
+
+            self.assertEqual(result.status, "installed")
+            self.assertEqual((server_dir / "pack2serve/runtime/java/bin/java.exe").read_bytes(), b"fake-java")
+            start = (server_dir / "start.ps1").read_text(encoding="utf-8")
+            self.assertIn("pack2serve\\runtime\\java\\bin\\java.exe", start)
+            self.assertTrue((server_dir / "pack2serve/java-install-result.json").exists())
+
+    def test_java_installer_rejects_unsafe_archive_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            tmp_path = Path(temp)
+            archive_path = tmp_path / "jre.zip"
+            with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED) as archive:
+                archive.writestr("../outside/bin/java.exe", b"bad")
+            server_dir = tmp_path / "server"
+            server_dir.mkdir()
+            plan = JavaRuntimeInstallPlan(
+                required_major=17,
+                os="windows",
+                arch="x64",
+                kind="adoptium-jre-archive",
+                download_url=archive_path.as_uri(),
+                archive_path="pack2serve/java/jre.zip",
+                install_dir="pack2serve/runtime/java",
+                java_executable="pack2serve/runtime/java/bin/java.exe",
+                notes=[],
+            )
+
+            with self.assertRaises(ValueError):
+                JavaInstaller().install(server_dir, plan)
+            self.assertFalse((tmp_path / "outside").exists())
 
     def test_loader_install_plan_generates_loader_specific_sources(self) -> None:
         fabric = create_loader_install_plan("fabric-loader", "0.18.4", "1.20.1")
@@ -222,6 +299,7 @@ class Pack2ServeCoreTests(unittest.TestCase):
             self.assertTrue((target / "world/level.dat").exists())
             self.assertTrue((target / "pack2serve/build-report.json").exists())
             self.assertTrue((target / "pack2serve/loader-install-plan.json").exists())
+            self.assertTrue((target / "pack2serve/java-runtime-install-plan.json").exists())
             self.assertTrue((target / "start.ps1").exists())
             self.assertTrue((target / "eula.txt").exists())
             self.assertTrue((target / "server.properties").exists())
@@ -501,6 +579,28 @@ class Pack2ServeCoreTests(unittest.TestCase):
             self.assertEqual(exit_code, 0)
             self.assertEqual((server_dir / "server.jar").read_bytes(), b"server")
             self.assertTrue((plan_dir / "loader-install-result.json").exists())
+
+    def test_cli_install_java_reads_plan_downloads_runtime_and_rewrites_start_script(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            tmp_path = Path(temp)
+            archive_path = tmp_path / "jre.zip"
+            with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED) as archive:
+                archive.writestr("jdk-17/bin/java.exe", b"fake-java")
+            server_dir = tmp_path / "server"
+            plan_dir = server_dir / "pack2serve"
+            plan_dir.mkdir(parents=True)
+            (server_dir / "start.ps1").write_text("$java = 'java'\n& $java -jar 'server.jar' nogui\n", encoding="utf-8")
+            plan = create_java_runtime_install_plan(17, os_name="Windows", machine="AMD64")
+            plan_data = plan.to_json_dict()
+            plan_data["download_url"] = archive_path.as_uri()
+            (plan_dir / "java-runtime-install-plan.json").write_text(json.dumps(plan_data), encoding="utf-8")
+
+            with redirect_stdout(StringIO()):
+                exit_code = main(["install-java", str(server_dir)])
+
+            self.assertEqual(exit_code, 0)
+            self.assertTrue((server_dir / "pack2serve/runtime/java/bin/java.exe").exists())
+            self.assertIn("pack2serve\\runtime\\java\\bin\\java.exe", (server_dir / "start.ps1").read_text())
 
     def test_cli_validate_server_runs_custom_command(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

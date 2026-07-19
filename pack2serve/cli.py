@@ -8,6 +8,7 @@ from pack2serve.builder import ServerBuilder
 from pack2serve.downloader import ArtifactCache, CurseForgeTemplateMirrorProvider
 from pack2serve.eula import accept_eula
 from pack2serve.installer import LoaderInstaller, load_loader_plan
+from pack2serve.java import JavaInstaller, JavaRuntimeInstallResult, load_java_runtime_install_plan
 from pack2serve.parser import parse_modpack
 from pack2serve.validator import ServerValidator
 
@@ -40,6 +41,8 @@ def main(argv: list[str] | None = None) -> int:
     prepare_parser.add_argument("--download", action="store_true")
     prepare_parser.add_argument("--curseforge-mirror", action="append", default=[])
     prepare_parser.add_argument("--execute-installers", action="store_true")
+    prepare_parser.add_argument("--install-java", action="store_true")
+    prepare_parser.add_argument("--java-url-override")
     prepare_parser.add_argument("--loader-url-override")
     prepare_parser.add_argument("--validate", action="store_true")
     prepare_parser.add_argument("--timeout", type=int, default=120)
@@ -50,6 +53,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     install_parser.add_argument("server_dir", type=Path)
     install_parser.add_argument("--execute-installers", action="store_true")
+
+    java_parser = subcommands.add_parser(
+        "install-java", help="Download and install the generated portable Java runtime plan"
+    )
+    java_parser.add_argument("server_dir", type=Path)
+    java_parser.add_argument("--java-url-override")
 
     validate_parser = subcommands.add_parser(
         "validate-server", help="Run a first-start validation command for a generated server"
@@ -63,6 +72,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     prepare_existing_parser.add_argument("server_dir", type=Path)
     prepare_existing_parser.add_argument("--execute-installers", action="store_true")
+    prepare_existing_parser.add_argument("--install-java", action="store_true")
+    prepare_existing_parser.add_argument("--java-url-override")
     prepare_existing_parser.add_argument("--validate", action="store_true")
     prepare_existing_parser.add_argument("--timeout", type=int, default=120)
     prepare_existing_parser.add_argument("--validation-command", nargs="+")
@@ -136,6 +147,9 @@ def main(argv: list[str] | None = None) -> int:
             plan,
             execute_installers=args.execute_installers,
         )
+        java_result = None
+        if args.install_java:
+            java_result = _install_java(args.target, args.java_url_override)
         validation_result = None
         if args.validate:
             validation_result = ServerValidator().validate(
@@ -152,6 +166,7 @@ def main(argv: list[str] | None = None) -> int:
                         "remoteFiles": len(build_report.downloads),
                     },
                     "loader": install_result.to_json_dict(),
+                    "javaRuntime": java_result.to_json_dict() if java_result else None,
                     "validation": validation_result.to_json_dict() if validation_result else None,
                 },
                 ensure_ascii=False,
@@ -168,6 +183,11 @@ def main(argv: list[str] | None = None) -> int:
             plan,
             execute_installers=args.execute_installers,
         )
+        print(json.dumps(result.to_json_dict(), ensure_ascii=False, indent=2))
+        return 0
+
+    if args.command == "install-java":
+        result = _install_java(args.server_dir, args.java_url_override)
         print(json.dumps(result.to_json_dict(), ensure_ascii=False, indent=2))
         return 0
 
@@ -188,6 +208,9 @@ def main(argv: list[str] | None = None) -> int:
             plan,
             execute_installers=args.execute_installers,
         )
+        java_result = None
+        if args.install_java:
+            java_result = _install_java(args.server_dir, args.java_url_override)
         validation_result = None
         if args.validate:
             validation_result = ServerValidator().validate(
@@ -199,6 +222,7 @@ def main(argv: list[str] | None = None) -> int:
             json.dumps(
                 {
                     "loader": install_result.to_json_dict(),
+                    "javaRuntime": java_result.to_json_dict() if java_result else None,
                     "validation": validation_result.to_json_dict() if validation_result else None,
                 },
                 ensure_ascii=False,
@@ -236,6 +260,16 @@ def _override_loader_url(plan_path: Path, url: str) -> None:
     if data.get("kind") == "direct-server-jar":
         data["install_command"] = ["download", url, data.get("artifact_path", "server.jar")]
     plan_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _install_java(server_dir: Path, url_override: str | None = None) -> JavaRuntimeInstallResult:
+    plan_path = server_dir / "pack2serve" / "java-runtime-install-plan.json"
+    if url_override:
+        data = json.loads(plan_path.read_text(encoding="utf-8"))
+        data["download_url"] = url_override
+        plan_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    plan = load_java_runtime_install_plan(plan_path)
+    return JavaInstaller().install(server_dir, plan)
 
 
 if __name__ == "__main__":

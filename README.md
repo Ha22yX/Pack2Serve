@@ -45,6 +45,12 @@ Download the loader artifact for a generated server project:
 python -m pack2serve.cli install-loader "data\servers\example"
 ```
 
+Install a portable Java runtime into the generated server project:
+
+```powershell
+python -m pack2serve.cli install-java "data\servers\example"
+```
+
 Run Forge/NeoForge installer jars after downloading them:
 
 ```powershell
@@ -54,7 +60,7 @@ python -m pack2serve.cli install-loader "data\servers\example" --execute-install
 Run the full local pipeline:
 
 ```powershell
-python -m pack2serve.cli prepare "C:\path\to\modpack.mrpack" --target "data\servers\example" --download --validate
+python -m pack2serve.cli prepare "C:\path\to\modpack.mrpack" --target "data\servers\example" --download --install-java --validate
 ```
 
 Validate an existing generated server:

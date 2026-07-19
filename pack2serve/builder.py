@@ -12,7 +12,7 @@ from pack2serve.downloader import (
     ModrinthDirectProvider,
     copy_cached_artifact,
 )
-from pack2serve.java import plan_java
+from pack2serve.java import create_java_runtime_install_plan, plan_java
 from pack2serve.loader import create_loader_install_plan
 from pack2serve.models import BuildReport, CopiedOverride, ManualAction, ModpackFormat, RemoteFile
 from pack2serve.parser import parse_modpack
@@ -206,6 +206,14 @@ class ServerBuilder:
         )
         (pack2serve / "java-plan.json").write_text(
             json.dumps(report.java.__dict__, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        (pack2serve / "java-runtime-install-plan.json").write_text(
+            json.dumps(
+                create_java_runtime_install_plan(report.java.required_major).to_json_dict(),
+                ensure_ascii=False,
+                indent=2,
+            ),
             encoding="utf-8",
         )
         (pack2serve / "loader-install-plan.json").write_text(

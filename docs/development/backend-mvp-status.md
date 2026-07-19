@@ -18,6 +18,10 @@ Current capabilities:
 - Generate `eula.txt`, `server.properties`, `start.ps1`, `pack2serve/build-report.json`, `pack2serve/download-plan.json`, `pack2serve/java-plan.json`, and `pack2serve/loader-install-plan.json`.
 - Plan Java major version requirements from Minecraft version.
 - Detect local Java runtime and report whether it matches the recommended major version.
+- Generate `pack2serve/java-runtime-install-plan.json` for a project-local portable JRE.
+- Install a portable Java runtime with `install-java`.
+- Rewrite `start.ps1` to use the project-local Java executable after runtime installation.
+- Safely extract Java runtime archives with path traversal checks.
 - Download Modrinth remote files through their `downloads[]` URLs when `--download` is enabled.
 - Cache downloaded artifacts under `data/cache`.
 - Verify Modrinth downloads with SHA1/SHA512 and expected file size when present.
@@ -70,10 +74,16 @@ python -m pack2serve.cli install-loader "data\servers\example"
 python -m pack2serve.cli install-loader "data\servers\example" --execute-installers
 ```
 
+Install the generated portable Java runtime plan:
+
+```powershell
+python -m pack2serve.cli install-java "data\servers\example"
+```
+
 Run the full local pipeline:
 
 ```powershell
-python -m pack2serve.cli prepare "C:\path\to\modpack.mrpack" --target "data\servers\example" --download --validate
+python -m pack2serve.cli prepare "C:\path\to\modpack.mrpack" --target "data\servers\example" --download --install-java --validate
 ```
 
 Validate an existing generated server:
@@ -115,13 +125,13 @@ The `Into the Backrooms` Fabric sample has been through a real local first-start
 - CurseForge no-key mirror resolution supports template providers, but no default public mirror is bundled yet.
 - Loader artifacts can be downloaded, but Forge/NeoForge installer execution is only run when `--execute-installers` is provided.
 - Minecraft EULA acceptance is explicit; Pack2Serve will not automatically accept it without `accept-eula --i-agree`.
-- Java is detected locally, but Pack2Serve does not yet install Java distributions.
+- Java runtime installation is implemented as a project-local portable JRE flow, but it has not yet been run against a real Adoptium download in CI.
 
 ## Next Development Step
 
 Implement installer execution and runtime hosting:
 
-1. Java distribution installer/selector
+1. Real Adoptium Java runtime download verification
 2. Forge/NeoForge installer execution validation with real packs
 3. client-only mod detection database
 4. web API and panel integration
