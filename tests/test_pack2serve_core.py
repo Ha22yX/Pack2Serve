@@ -19,6 +19,7 @@ from pack2serve.java import (
 )
 from pack2serve.loader import LoaderInstallPlan, create_loader_install_plan
 from pack2serve.installer import LoaderInstaller
+from pack2serve.panel import PanelService
 from pack2serve.parser import ModpackFormat, parse_modpack
 from pack2serve.validator import ServerValidator
 
@@ -381,6 +382,36 @@ class Pack2ServeCoreTests(unittest.TestCase):
 
             self.assertEqual((target / "mods/remote.jar").read_bytes(), b"remote-content")
             self.assertEqual(len(report.manual_actions), 0)
+
+    def test_panel_service_imports_pack_and_lists_generated_server(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            tmp_path = Path(temp)
+            pack = tmp_path / "panel-sample.mrpack"
+            write_zip(
+                pack,
+                {
+                    "modrinth.index.json": json.dumps(
+                        {
+                            "formatVersion": 1,
+                            "game": "minecraft",
+                            "name": "Panel Sample",
+                            "versionId": "1.0.0",
+                            "dependencies": {"minecraft": "1.20.1", "fabric-loader": "0.18.4"},
+                            "files": [],
+                        }
+                    ),
+                },
+            )
+            service = PanelService(workspace_dir=tmp_path / "workspace")
+
+            imported = service.import_pack(pack, target_name="My Server")
+            servers = service.list_servers()
+
+            self.assertEqual(imported["name"], "Panel Sample")
+            self.assertEqual(imported["targetName"], "my-server")
+            self.assertTrue((tmp_path / "workspace/servers/my-server/pack2serve/build-report.json").exists())
+            self.assertEqual(len(servers), 1)
+            self.assertEqual(servers[0]["targetName"], "my-server")
 
     def test_curseforge_template_mirror_downloads_project_file_pair(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

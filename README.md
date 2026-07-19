@@ -75,6 +75,12 @@ Explicitly accept the Minecraft EULA after reading it:
 python -m pack2serve.cli accept-eula "data\servers\example" --i-agree
 ```
 
+Run the local web panel:
+
+```powershell
+python -m pack2serve.cli serve-panel --host 127.0.0.1 --port 8765
+```
+
 Validation streams server output, detects EULA stops and startup completion, and sends `stop`
 after Minecraft reports `Done (...)! For help`.
 

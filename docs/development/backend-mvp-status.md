@@ -36,6 +36,9 @@ Current capabilities:
 - Optionally execute Forge/NeoForge installer jars with `--execute-installers`.
 - Validate generated servers with `validate-server`.
 - Run build, loader install, and optional validation with `prepare`.
+- Run a local standard-library web panel with `serve-panel`.
+- Import local modpack archive paths from the panel through `POST /api/import`.
+- List panel-generated server projects through `GET /api/servers`.
 - Write `pack2serve/validation-report.json` and `logs/pack2serve-validation.log`.
 - Detect `started`, `needs-eula`, `failed`, `crashed`, and `timed-out` validation states.
 - Stream validation output and stop a long-running server after the Minecraft `Done (...)! For help` startup marker.
@@ -98,6 +101,12 @@ Explicitly accept the Minecraft EULA:
 python -m pack2serve.cli accept-eula "data\servers\example" --i-agree
 ```
 
+Run the local web panel:
+
+```powershell
+python -m pack2serve.cli serve-panel --host 127.0.0.1 --port 8765
+```
+
 ## Integration Samples
 
 The following sample packs were parsed and built into `data/servers/integration/`:
@@ -126,6 +135,7 @@ The `Into the Backrooms` Fabric sample has been through a real local first-start
 - Loader artifacts can be downloaded, but Forge/NeoForge installer execution is only run when `--execute-installers` is provided.
 - Minecraft EULA acceptance is explicit; Pack2Serve will not automatically accept it without `accept-eula --i-agree`.
 - Java runtime installation is implemented as a project-local portable JRE flow, but it has not yet been run against a real Adoptium download in CI.
+- The web panel currently imports local file paths; browser drag-and-drop upload, run controls, and live logs are still pending.
 
 ## Next Development Step
 
@@ -134,5 +144,5 @@ Implement installer execution and runtime hosting:
 1. Real Adoptium Java runtime download verification
 2. Forge/NeoForge installer execution validation with real packs
 3. client-only mod detection database
-4. web API and panel integration
+4. panel upload flow, action buttons, and live logs
 5. runtime process/container manager

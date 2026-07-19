@@ -82,6 +82,11 @@ def main(argv: list[str] | None = None) -> int:
     eula_parser.add_argument("server_dir", type=Path)
     eula_parser.add_argument("--i-agree", action="store_true")
 
+    panel_parser = subcommands.add_parser("serve-panel", help="Run the local Pack2Serve web panel")
+    panel_parser.add_argument("--host", default="127.0.0.1")
+    panel_parser.add_argument("--port", type=int, default=8765)
+    panel_parser.add_argument("--workspace", type=Path, default=Path("data"))
+
     args = parser.parse_args(argv)
     if args.command == "inspect":
         pack = parse_modpack(args.pack)
@@ -237,6 +242,12 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         path = accept_eula(args.server_dir)
         print(json.dumps({"status": "accepted", "path": str(path)}, ensure_ascii=False, indent=2))
+        return 0
+
+    if args.command == "serve-panel":
+        from pack2serve.web import serve
+
+        serve(args.host, args.port, args.workspace)
         return 0
 
     return 2

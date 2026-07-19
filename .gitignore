@@ -13,6 +13,7 @@ data/uploads/
 data/cache/
 data/servers/
 data/logs/
+data/*.log
 
 # OS/editor noise
 .DS_Store
