@@ -30,6 +30,10 @@ Current capabilities:
 - Download loader artifacts with `install-loader`.
 - Rewrite `start.ps1` automatically after direct server jar installation.
 - Optionally execute Forge/NeoForge installer jars with `--execute-installers`.
+- Validate generated servers with `validate-server`.
+- Run build, loader install, and optional validation with `prepare`.
+- Write `pack2serve/validation-report.json` and `logs/pack2serve-validation.log`.
+- Detect `started`, `needs-eula`, `failed`, `crashed`, and `timed-out` validation states.
 
 ## CLI
 
@@ -64,6 +68,18 @@ python -m pack2serve.cli install-loader "data\servers\example"
 python -m pack2serve.cli install-loader "data\servers\example" --execute-installers
 ```
 
+Run the full local pipeline:
+
+```powershell
+python -m pack2serve.cli prepare "C:\path\to\modpack.mrpack" --target "data\servers\example" --download --validate
+```
+
+Validate an existing generated server:
+
+```powershell
+python -m pack2serve.cli validate-server "data\servers\example" --timeout 120
+```
+
 ## Integration Samples
 
 The following sample packs were parsed and built into `data/servers/integration/`:
@@ -81,7 +97,7 @@ The following sample packs were parsed and built into `data/servers/integration/
 - Modrinth direct download is implemented, but it is only executed when `--download` is enabled.
 - CurseForge no-key mirror resolution supports template providers, but no default public mirror is bundled yet.
 - Loader artifacts can be downloaded, but Forge/NeoForge installer execution is only run when `--execute-installers` is provided.
-- `start.ps1` is a placeholder that expects `server.jar` to exist after loader installation.
+- Minecraft EULA acceptance is detected during validation, but Pack2Serve does not automatically accept the EULA for the user.
 - Java is detected locally, but Pack2Serve does not yet install Java distributions.
 
 ## Next Development Step

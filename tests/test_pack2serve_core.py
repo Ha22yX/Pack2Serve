@@ -14,6 +14,7 @@ from pack2serve.java import java_status, required_java_major
 from pack2serve.loader import LoaderInstallPlan, create_loader_install_plan
 from pack2serve.installer import LoaderInstaller
 from pack2serve.parser import ModpackFormat, parse_modpack
+from pack2serve.validator import ServerValidator
 
 
 def write_zip(path: Path, files: dict[str, str | bytes]) -> None:
@@ -500,6 +501,221 @@ class Pack2ServeCoreTests(unittest.TestCase):
             self.assertEqual(exit_code, 0)
             self.assertEqual((server_dir / "server.jar").read_bytes(), b"server")
             self.assertTrue((plan_dir / "loader-install-result.json").exists())
+
+    def test_cli_validate_server_runs_custom_command(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            tmp_path = Path(temp)
+            server_dir = tmp_path / "server"
+            server_dir.mkdir()
+            fake = tmp_path / "fake_server.py"
+            fake.write_text("print('Done (0.1s)! For help, type \"help\"')\n", encoding="utf-8")
+
+            with redirect_stdout(StringIO()):
+                exit_code = main(
+                    [
+                        "validate-server",
+                        str(server_dir),
+                        "--command",
+                        "python",
+                        str(fake),
+                    ]
+                )
+
+            self.assertEqual(exit_code, 0)
+            self.assertTrue((server_dir / "pack2serve/validation-report.json").exists())
+
+    def test_cli_prepare_builds_installs_and_validates_with_custom_command(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            tmp_path = Path(temp)
+            remote = tmp_path / "server-source.jar"
+            remote.write_bytes(b"server")
+            fake = tmp_path / "fake_server.py"
+            fake.write_text("print('Done (0.1s)! For help, type \"help\"')\n", encoding="utf-8")
+            pack = tmp_path / "sample.mrpack"
+            target = tmp_path / "server"
+            write_zip(
+                pack,
+                {
+                    "modrinth.index.json": json.dumps(
+                        {
+                            "formatVersion": 1,
+                            "game": "minecraft",
+                            "name": "Prepare Pack",
+                            "versionId": "1.0.0",
+                            "dependencies": {"minecraft": "1.20.1", "fabric-loader": "0.18.4"},
+                            "files": [],
+                        }
+                    ),
+                },
+            )
+            # Build first so the test can patch the generated plan to a local file URL.
+            with redirect_stdout(StringIO()):
+                self.assertEqual(main(["build", str(pack), "--target", str(target)]), 0)
+            plan_path = target / "pack2serve/loader-install-plan.json"
+            plan_data = json.loads(plan_path.read_text(encoding="utf-8"))
+            plan_data["download_url"] = remote.as_uri()
+            plan_data["install_command"] = ["download", remote.as_uri(), "server.jar"]
+            plan_path.write_text(json.dumps(plan_data), encoding="utf-8")
+
+            with redirect_stdout(StringIO()):
+                exit_code = main(
+                    [
+                        "prepare-existing",
+                        str(target),
+                        "--validate",
+                        "--validation-command",
+                        "python",
+                        str(fake),
+                    ]
+                )
+
+            self.assertEqual(exit_code, 0)
+            self.assertTrue((target / "server.jar").exists())
+            self.assertTrue((target / "pack2serve/validation-report.json").exists())
+
+    def test_cli_prepare_builds_pack_installs_loader_and_validates(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            tmp_path = Path(temp)
+            loader_source = tmp_path / "fabric-server.jar"
+            loader_source.write_bytes(b"server")
+            fake = tmp_path / "fake_server.py"
+            fake.write_text("print('Done (0.1s)! For help, type \"help\"')\n", encoding="utf-8")
+            pack = tmp_path / "sample.mrpack"
+            target = tmp_path / "server"
+            write_zip(
+                pack,
+                {
+                    "modrinth.index.json": json.dumps(
+                        {
+                            "formatVersion": 1,
+                            "game": "minecraft",
+                            "name": "Prepare Full",
+                            "versionId": "1.0.0",
+                            "dependencies": {"minecraft": "1.20.1", "fabric-loader": "0.18.4"},
+                            "files": [],
+                        }
+                    ),
+                },
+            )
+
+            with redirect_stdout(StringIO()):
+                exit_code = main(
+                    [
+                        "prepare",
+                        str(pack),
+                        "--target",
+                        str(target),
+                        "--loader-url-override",
+                        loader_source.as_uri(),
+                        "--validate",
+                        "--validation-command",
+                        "python",
+                        str(fake),
+                    ]
+                )
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual((target / "server.jar").read_bytes(), b"server")
+            report = json.loads((target / "pack2serve/validation-report.json").read_text(encoding="utf-8"))
+            self.assertEqual(report["status"], "started")
+
+    def test_server_validator_detects_successful_start_and_writes_report(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            tmp_path = Path(temp)
+            server_dir = tmp_path / "server"
+            server_dir.mkdir()
+            fake = tmp_path / "fake_server.py"
+            fake.write_text(
+                "print('Starting minecraft server version 1.20.1')\n"
+                "print('Done (0.123s)! For help, type \"help\"')\n",
+                encoding="utf-8",
+            )
+
+            result = ServerValidator().validate(
+                server_dir,
+                command=["python", str(fake)],
+                timeout_seconds=10,
+            )
+
+            self.assertEqual(result.status, "started")
+            self.assertTrue((server_dir / "pack2serve/validation-report.json").exists())
+            self.assertTrue((server_dir / "logs/pack2serve-validation.log").exists())
+
+    def test_server_validator_detects_crash_output(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            tmp_path = Path(temp)
+            server_dir = tmp_path / "server"
+            server_dir.mkdir()
+            fake = tmp_path / "fake_crash.py"
+            fake.write_text(
+                "import sys\n"
+                "print('Crash report saved to crash-reports/crash.txt')\n"
+                "sys.exit(1)\n",
+                encoding="utf-8",
+            )
+
+            result = ServerValidator().validate(
+                server_dir,
+                command=["python", str(fake)],
+                timeout_seconds=10,
+            )
+
+            self.assertEqual(result.status, "crashed")
+            self.assertIn("Crash report", result.combined_output)
+
+    def test_server_validator_detects_java_exception_even_with_zero_exit(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            tmp_path = Path(temp)
+            server_dir = tmp_path / "server"
+            server_dir.mkdir()
+            fake = tmp_path / "fake_exception.py"
+            fake.write_text(
+                "print('Exception in thread \"main\" java.lang.RuntimeException: failed')\n"
+                "print('Caused by: java.nio.file.AccessDeniedException: server.jar')\n",
+                encoding="utf-8",
+            )
+
+            result = ServerValidator().validate(
+                server_dir,
+                command=["python", str(fake)],
+                timeout_seconds=10,
+            )
+
+            self.assertEqual(result.status, "failed")
+            self.assertTrue(any("permission" in hint.lower() for hint in result.hints))
+
+    def test_server_validator_detects_eula_stop(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            tmp_path = Path(temp)
+            server_dir = tmp_path / "server"
+            server_dir.mkdir()
+            fake = tmp_path / "fake_eula.py"
+            fake.write_text(
+                "print('You need to agree to the EULA in order to run the server.')\n",
+                encoding="utf-8",
+            )
+
+            result = ServerValidator().validate(
+                server_dir,
+                command=["python", str(fake)],
+                timeout_seconds=10,
+            )
+
+            self.assertEqual(result.status, "needs-eula")
+            self.assertTrue(any("EULA" in hint for hint in result.hints))
+
+    def test_server_validator_default_command_handles_relative_server_dir(self) -> None:
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as temp:
+            server_dir = Path(temp)
+            relative_server_dir = server_dir.relative_to(Path.cwd())
+            (server_dir / "start.ps1").write_text(
+                "Write-Output 'Done (0.1s)! For help, type help'\n",
+                encoding="utf-8",
+            )
+
+            result = ServerValidator().validate(relative_server_dir, timeout_seconds=10)
+
+            self.assertEqual(result.status, "started")
 
 
 if __name__ == "__main__":

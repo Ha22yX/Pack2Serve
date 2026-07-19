@@ -51,4 +51,16 @@ Run Forge/NeoForge installer jars after downloading them:
 python -m pack2serve.cli install-loader "data\servers\example" --execute-installers
 ```
 
+Run the full local pipeline:
+
+```powershell
+python -m pack2serve.cli prepare "C:\path\to\modpack.mrpack" --target "data\servers\example" --download --validate
+```
+
+Validate an existing generated server:
+
+```powershell
+python -m pack2serve.cli validate-server "data\servers\example" --timeout 120
+```
+
 See `docs/development/backend-mvp-status.md` for the current implementation status.
