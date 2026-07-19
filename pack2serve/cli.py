@@ -6,6 +6,7 @@ from pathlib import Path
 
 from pack2serve.builder import ServerBuilder
 from pack2serve.downloader import ArtifactCache, CurseForgeTemplateMirrorProvider
+from pack2serve.eula import accept_eula
 from pack2serve.installer import LoaderInstaller, load_loader_plan
 from pack2serve.parser import parse_modpack
 from pack2serve.validator import ServerValidator
@@ -65,6 +66,10 @@ def main(argv: list[str] | None = None) -> int:
     prepare_existing_parser.add_argument("--validate", action="store_true")
     prepare_existing_parser.add_argument("--timeout", type=int, default=120)
     prepare_existing_parser.add_argument("--validation-command", nargs="+")
+
+    eula_parser = subcommands.add_parser("accept-eula", help="Accept the Minecraft EULA for a generated server")
+    eula_parser.add_argument("server_dir", type=Path)
+    eula_parser.add_argument("--i-agree", action="store_true")
 
     args = parser.parse_args(argv)
     if args.command == "inspect":
@@ -200,6 +205,14 @@ def main(argv: list[str] | None = None) -> int:
                 indent=2,
             )
         )
+        return 0
+
+    if args.command == "accept-eula":
+        if not args.i_agree:
+            print("Refusing to modify eula.txt without --i-agree.")
+            return 1
+        path = accept_eula(args.server_dir)
+        print(json.dumps({"status": "accepted", "path": str(path)}, ensure_ascii=False, indent=2))
         return 0
 
     return 2

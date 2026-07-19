@@ -524,6 +524,22 @@ class Pack2ServeCoreTests(unittest.TestCase):
             self.assertEqual(exit_code, 0)
             self.assertTrue((server_dir / "pack2serve/validation-report.json").exists())
 
+    def test_cli_accept_eula_requires_flag_and_updates_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            tmp_path = Path(temp)
+            server_dir = tmp_path / "server"
+            server_dir.mkdir()
+            (server_dir / "eula.txt").write_text("eula=false\n", encoding="utf-8")
+
+            with redirect_stdout(StringIO()):
+                declined = main(["accept-eula", str(server_dir)])
+            with redirect_stdout(StringIO()):
+                accepted = main(["accept-eula", str(server_dir), "--i-agree"])
+
+            self.assertEqual(declined, 1)
+            self.assertEqual(accepted, 0)
+            self.assertIn("eula=true", (server_dir / "eula.txt").read_text(encoding="utf-8"))
+
     def test_cli_prepare_builds_installs_and_validates_with_custom_command(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             tmp_path = Path(temp)
@@ -640,6 +656,28 @@ class Pack2ServeCoreTests(unittest.TestCase):
             self.assertEqual(result.status, "started")
             self.assertTrue((server_dir / "pack2serve/validation-report.json").exists())
             self.assertTrue((server_dir / "logs/pack2serve-validation.log").exists())
+
+    def test_server_validator_stops_long_running_server_after_done_marker(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            tmp_path = Path(temp)
+            server_dir = tmp_path / "server"
+            server_dir.mkdir()
+            fake = tmp_path / "fake_long_server.py"
+            fake.write_text(
+                "import time\n"
+                "print('Done (0.1s)! For help, type \"help\"', flush=True)\n"
+                "time.sleep(30)\n",
+                encoding="utf-8",
+            )
+
+            result = ServerValidator().validate(
+                server_dir,
+                command=["python", str(fake)],
+                timeout_seconds=5,
+            )
+
+            self.assertEqual(result.status, "started")
+            self.assertFalse(result.timed_out)
 
     def test_server_validator_detects_crash_output(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

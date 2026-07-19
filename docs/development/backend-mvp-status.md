@@ -34,6 +34,8 @@ Current capabilities:
 - Run build, loader install, and optional validation with `prepare`.
 - Write `pack2serve/validation-report.json` and `logs/pack2serve-validation.log`.
 - Detect `started`, `needs-eula`, `failed`, `crashed`, and `timed-out` validation states.
+- Stream validation output and stop a long-running server after the Minecraft `Done (...)! For help` startup marker.
+- Explicitly accept Minecraft EULA with `accept-eula --i-agree`.
 
 ## CLI
 
@@ -80,6 +82,12 @@ Validate an existing generated server:
 python -m pack2serve.cli validate-server "data\servers\example" --timeout 120
 ```
 
+Explicitly accept the Minecraft EULA:
+
+```powershell
+python -m pack2serve.cli accept-eula "data\servers\example" --i-agree
+```
+
 ## Integration Samples
 
 The following sample packs were parsed and built into `data/servers/integration/`:
@@ -92,12 +100,21 @@ The following sample packs were parsed and built into `data/servers/integration/
 | Into the Backrooms | CurseForge | Fabric 0.18.4 | 36 | 39 | 36 |
 | Re-Console LTS NeoForge | Modrinth | NeoForge 21.1.233 | 115 | 1855 | 0 |
 
+## Runtime Verification
+
+The `Into the Backrooms` Fabric sample has been through a real local first-start check:
+
+- `install-loader` downloaded the Fabric server launcher jar.
+- `validate-server` first reported `needs-eula`.
+- `accept-eula --i-agree` updated `eula.txt` explicitly.
+- `validate-server --timeout 120` then reached `status: started` and stopped the server cleanly after Minecraft reported startup completion.
+
 ## Current Limits
 
 - Modrinth direct download is implemented, but it is only executed when `--download` is enabled.
 - CurseForge no-key mirror resolution supports template providers, but no default public mirror is bundled yet.
 - Loader artifacts can be downloaded, but Forge/NeoForge installer execution is only run when `--execute-installers` is provided.
-- Minecraft EULA acceptance is detected during validation, but Pack2Serve does not automatically accept the EULA for the user.
+- Minecraft EULA acceptance is explicit; Pack2Serve will not automatically accept it without `accept-eula --i-agree`.
 - Java is detected locally, but Pack2Serve does not yet install Java distributions.
 
 ## Next Development Step
@@ -105,7 +122,7 @@ The following sample packs were parsed and built into `data/servers/integration/
 Implement installer execution and runtime hosting:
 
 1. Java distribution installer/selector
-2. first-run validation and log analysis
+2. Forge/NeoForge installer execution validation with real packs
 3. client-only mod detection database
 4. web API and panel integration
 5. runtime process/container manager

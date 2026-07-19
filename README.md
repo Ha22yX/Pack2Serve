@@ -63,4 +63,13 @@ Validate an existing generated server:
 python -m pack2serve.cli validate-server "data\servers\example" --timeout 120
 ```
 
+Explicitly accept the Minecraft EULA after reading it:
+
+```powershell
+python -m pack2serve.cli accept-eula "data\servers\example" --i-agree
+```
+
+Validation streams server output, detects EULA stops and startup completion, and sends `stop`
+after Minecraft reports `Done (...)! For help`.
+
 See `docs/development/backend-mvp-status.md` for the current implementation status.
