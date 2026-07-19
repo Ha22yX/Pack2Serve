@@ -11,6 +11,7 @@ from pack2serve.builder import ServerBuilder
 from pack2serve.cli import main
 from pack2serve.downloader import ArtifactCache, CurseForgeTemplateMirrorProvider, ModrinthDirectProvider
 from pack2serve.java import java_status, required_java_major
+from pack2serve.loader import create_loader_install_plan
 from pack2serve.parser import ModpackFormat, parse_modpack
 
 
@@ -105,6 +106,21 @@ class Pack2ServeCoreTests(unittest.TestCase):
         self.assertEqual(java_status(17, 8), "too-old")
         self.assertEqual(java_status(17, 17), "ok")
         self.assertEqual(java_status(8, 26), "newer-than-recommended")
+
+    def test_loader_install_plan_generates_loader_specific_sources(self) -> None:
+        fabric = create_loader_install_plan("fabric-loader", "0.18.4", "1.20.1")
+        forge = create_loader_install_plan("forge", "47.4.20", "1.20.1")
+        neoforge = create_loader_install_plan("neoforge", "21.1.233", "1.21.1")
+
+        self.assertEqual(fabric.kind, "direct-server-jar")
+        self.assertIn("meta.fabricmc.net", fabric.download_url)
+        self.assertEqual(fabric.server_jar, "server.jar")
+        self.assertEqual(forge.kind, "installer-jar")
+        self.assertIn("maven.minecraftforge.net", forge.download_url)
+        self.assertEqual(forge.install_command[-1], "--installServer")
+        self.assertEqual(neoforge.kind, "installer-jar")
+        self.assertIn("maven.neoforged.net", neoforge.download_url)
+        self.assertIn("neoforge-21.1.233-installer.jar", neoforge.artifact_name)
 
     def test_server_builder_copies_server_files_and_isolates_client_files(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

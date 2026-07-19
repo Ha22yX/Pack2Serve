@@ -23,6 +23,10 @@ Current capabilities:
 - Verify Modrinth downloads with SHA1/SHA512 and expected file size when present.
 - Resolve CurseForge files through configurable no-key mirror URL templates when `--curseforge-mirror` is provided.
 - Create manual action items for CurseForge files when no mirror provider resolves them.
+- Generate loader-specific install plans for Fabric, Forge, and NeoForge.
+- Fabric plans use the Fabric metadata API server launcher jar.
+- Forge plans use the MinecraftForge Maven installer jar.
+- NeoForge plans use the NeoForged Maven installer jar.
 
 ## CLI
 
@@ -66,17 +70,17 @@ The following sample packs were parsed and built into `data/servers/integration/
 
 - Modrinth direct download is implemented, but it is only executed when `--download` is enabled.
 - CurseForge no-key mirror resolution supports template providers, but no default public mirror is bundled yet.
-- Loader installers are planned in `loader-install-plan.json`, but Forge/Fabric/NeoForge server installation is not executed yet.
+- Loader installers are planned in `loader-install-plan.json`, including download URL and install command, but installer execution is not automated yet.
 - `start.ps1` is a placeholder that expects `server.jar` to exist after loader installation.
 - Java is detected locally, but Pack2Serve does not yet install Java distributions.
 
 ## Next Development Step
 
-Implement loader installers and runtime hosting:
+Implement installer execution and runtime hosting:
 
-1. Fabric server installer
-2. Forge server installer
-3. NeoForge server installer
+1. download loader installer/server launcher artifacts
+2. execute Fabric/Forge/NeoForge installer flows
+3. rewrite `start.ps1` after installer completion
 4. Java distribution installer/selector
 5. first-run validation and log analysis
 6. web API and panel integration

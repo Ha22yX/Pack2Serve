@@ -13,6 +13,7 @@ from pack2serve.downloader import (
     copy_cached_artifact,
 )
 from pack2serve.java import plan_java
+from pack2serve.loader import create_loader_install_plan
 from pack2serve.models import BuildReport, CopiedOverride, ManualAction, ModpackFormat, RemoteFile
 from pack2serve.parser import parse_modpack
 from pack2serve.zip_utils import copy_member, require_safe_zip
@@ -238,16 +239,11 @@ def _remote_to_dict(remote: object) -> dict[str, object]:
 
 def _loader_plan(report: BuildReport) -> dict[str, object]:
     loader = report.pack.loader
-    return {
-        "minecraftVersion": report.pack.minecraft_version,
-        "loader": loader.name,
-        "loaderVersion": loader.version,
-        "status": "planned",
-        "notes": [
-            "Loader installation is planned but not downloaded in the offline MVP builder.",
-            "The runtime manager should install this loader before first server start.",
-        ],
-    }
+    return create_loader_install_plan(
+        loader.name,
+        loader.version,
+        report.pack.minecraft_version,
+    ).to_json_dict()
 
 
 def _start_script(report: BuildReport) -> str:
