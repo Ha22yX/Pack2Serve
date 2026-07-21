@@ -7,12 +7,14 @@ import socket
 import subprocess
 import threading
 import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TextIO
 
 from pack2serve.builder import ServerBuilder
 from pack2serve.downloader import ArtifactCache, CurseForgeTemplateMirrorProvider, default_curseforge_providers
+from pack2serve.eula import accept_eula as accept_server_eula
 
 
 @dataclass
@@ -25,6 +27,36 @@ class RunningServer:
     last_lines: list[str] = field(default_factory=list)
 
 
+@dataclass
+class ProjectJob:
+    id: str
+    target_name: str
+    status: str = "queued"
+    stage: str = "queued"
+    progress: int = 0
+    message: str = "等待构建任务开始"
+    started_at: float = field(default_factory=time.time)
+    finished_at: float | None = None
+    log_lines: list[str] = field(default_factory=list)
+    server: dict[str, object] | None = None
+    error: str | None = None
+
+    def to_json_dict(self) -> dict[str, object]:
+        return {
+            "jobId": self.id,
+            "targetName": self.target_name,
+            "status": self.status,
+            "stage": self.stage,
+            "progress": self.progress,
+            "message": self.message,
+            "startedAt": int(self.started_at),
+            "finishedAt": int(self.finished_at) if self.finished_at else None,
+            "logLines": self.log_lines[-120:],
+            "server": self.server,
+            "error": self.error,
+        }
+
+
 class PanelService:
     def __init__(self, workspace_dir: str | Path = "data", advertise_host: str | None = None):
         self.workspace_dir = Path(workspace_dir)
@@ -32,6 +64,7 @@ class PanelService:
         self.cache_dir = self.workspace_dir / "cache"
         self.advertise_host = advertise_host or "127.0.0.1"
         self._running: dict[str, RunningServer] = {}
+        self._jobs: dict[str, ProjectJob] = {}
         self._lock = threading.RLock()
 
     def import_pack(
@@ -53,6 +86,85 @@ class PanelService:
             curseforge_providers=providers,
         ).build(pack_path, target)
         return _summary_from_report(target_slug, report.to_json_dict())
+
+    def create_project(
+        self,
+        pack_path: str | Path,
+        *,
+        project_name: str,
+        accept_eula: bool,
+        download: bool = True,
+        curseforge_mirrors: list[str] | None = None,
+    ) -> dict[str, object]:
+        if not accept_eula:
+            raise ValueError("You must accept the Minecraft EULA before creating a runnable server project.")
+        target_name = _slugify(project_name or Path(pack_path).stem)
+        job = ProjectJob(id=uuid.uuid4().hex, target_name=target_name)
+        with self._lock:
+            self._jobs[job.id] = job
+        thread = threading.Thread(
+            target=self._run_create_project,
+            args=(job.id, Path(pack_path), target_name, accept_eula, download, curseforge_mirrors or []),
+            daemon=True,
+        )
+        thread.start()
+        return job.to_json_dict()
+
+    def project_job(self, job_id: str) -> dict[str, object]:
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if not job:
+                raise ValueError(f"Unknown project job: {job_id}")
+            return job.to_json_dict()
+
+    def _run_create_project(
+        self,
+        job_id: str,
+        pack_path: Path,
+        target_name: str,
+        accept_eula: bool,
+        download: bool,
+        mirrors: list[str],
+    ) -> None:
+        target = self.servers_dir / target_name
+        try:
+            self._update_job(job_id, status="running", stage="inspect", progress=8, message="读取整合包元数据")
+            providers = self._curseforge_providers(mirrors)
+            self._append_job_log(job_id, f"项目目录: {target}")
+            self._append_job_log(job_id, f"整合包: {pack_path}")
+            self._update_job(job_id, stage="build", progress=22, message="解析整合包并复制 overrides")
+            report = ServerBuilder(
+                cache_dir=self.cache_dir,
+                download_remote=download,
+                curseforge_providers=providers,
+            ).build(pack_path, target)
+            self._append_job_log(job_id, f"远程文件: {len(report.downloads)}")
+            self._append_job_log(job_id, f"人工项: {len(report.manual_actions)}")
+            self._update_job(job_id, stage="eula", progress=76, message="写入 EULA 接受状态")
+            if accept_eula:
+                accept_server_eula(target)
+            self._update_job(job_id, stage="finalize", progress=92, message="生成项目摘要")
+            summary = _summary_from_report(target_name, report.to_json_dict())
+            summary.update(self.server_runtime_status(target_name))
+            with self._lock:
+                job = self._jobs[job_id]
+                job.status = "completed"
+                job.stage = "complete"
+                job.progress = 100
+                job.message = "项目创建完成"
+                job.finished_at = time.time()
+                job.server = summary
+                job.log_lines.append("项目创建完成")
+        except Exception as exc:
+            with self._lock:
+                job = self._jobs[job_id]
+                job.status = "failed"
+                job.stage = "failed"
+                job.progress = max(job.progress, 1)
+                job.message = str(exc)
+                job.error = str(exc)
+                job.finished_at = time.time()
+                job.log_lines.append(f"失败: {exc}")
 
     def list_servers(self) -> list[dict[str, object]]:
         if not self.servers_dir.exists():
@@ -171,6 +283,74 @@ class PanelService:
             "lines": lines,
         }
 
+    def send_console_command(self, target_name: str, command: str) -> dict[str, object]:
+        clean = command.strip()
+        if not clean:
+            raise ValueError("Console command cannot be empty.")
+        with self._lock:
+            running = self._running.get(target_name)
+            if not running or running.process.poll() is not None or not running.process.stdin:
+                raise ValueError(f"Server is not running: {target_name}")
+            running.process.stdin.write(clean + "\n")
+            running.process.stdin.flush()
+            running.last_lines.append(f"> {clean}")
+        return {
+            "targetName": target_name,
+            "command": clean,
+            "runtimeStatus": self.server_runtime_status(target_name)["runtimeStatus"],
+        }
+
+    def server_properties(self, target_name: str) -> dict[str, object]:
+        server_dir = self._server_dir(target_name)
+        path = server_dir / "server.properties"
+        return {
+            "targetName": target_name,
+            "path": str(path),
+            "properties": _read_properties(path),
+            "raw": path.read_text(encoding="utf-8", errors="replace") if path.exists() else "",
+        }
+
+    def save_server_properties(self, target_name: str, properties: dict[str, object]) -> dict[str, object]:
+        server_dir = self._server_dir(target_name)
+        path = server_dir / "server.properties"
+        current = _read_properties(path)
+        for key, value in properties.items():
+            clean_key = str(key).strip()
+            if not clean_key or "\n" in clean_key or "=" in clean_key:
+                raise ValueError(f"Invalid server.properties key: {key}")
+            current[clean_key] = str(value).replace("\r", "").replace("\n", " ")
+        _write_properties(path, current)
+        return self.server_properties(target_name)
+
+    def server_players(self, target_name: str) -> dict[str, object]:
+        server_dir = self._server_dir(target_name)
+        log_path = server_dir / "logs" / "panel-server.log"
+        players: dict[str, dict[str, object]] = {}
+        if log_path.exists():
+            for line in log_path.read_text(encoding="utf-8", errors="replace").splitlines():
+                joined = re.search(r": ([A-Za-z0-9_]{1,16}) joined the game", line)
+                left = re.search(r": ([A-Za-z0-9_]{1,16}) left the game", line)
+                mode = re.search(r"Set ([A-Za-z0-9_]{1,16})'s game mode to ([A-Za-z ]+)", line)
+                if joined:
+                    players[joined.group(1)] = {
+                        "name": joined.group(1),
+                        "status": "online",
+                        "gameMode": "unknown",
+                        "source": "log",
+                    }
+                if mode and mode.group(1) in players:
+                    players[mode.group(1)]["gameMode"] = mode.group(2).strip().lower().replace(" ", "-")
+                if left:
+                    players.pop(left.group(1), None)
+        return {
+            "targetName": target_name,
+            "players": list(players.values()),
+            "capabilities": {
+                "gameMode": "log-derived",
+                "note": "实时玩家模式需要 RCON 或服务端插件；当前版本只能从日志中推断。",
+            },
+        }
+
     def _curseforge_providers(self, mirrors: list[str]) -> list[object]:
         cache = ArtifactCache(self.cache_dir)
         providers: list[object] = default_curseforge_providers()
@@ -195,6 +375,28 @@ class PanelService:
         if not server_dir.exists():
             raise ValueError(f"Unknown server: {target_name}")
         return server_dir
+
+    def _update_job(
+        self,
+        job_id: str,
+        *,
+        stage: str,
+        progress: int,
+        message: str,
+        status: str | None = None,
+    ) -> None:
+        with self._lock:
+            job = self._jobs[job_id]
+            if status is not None:
+                job.status = status
+            job.stage = stage
+            job.progress = progress
+            job.message = message
+            job.log_lines.append(message)
+
+    def _append_job_log(self, job_id: str, line: str) -> None:
+        with self._lock:
+            self._jobs[job_id].log_lines.append(line)
 
     def _monitor_process(self, target_name: str, running: RunningServer) -> None:
         stdout = running.process.stdout
@@ -292,6 +494,24 @@ def _write_log_line(log: TextIO, line: str) -> None:
 
 def _tail_text_file(path: Path, max_lines: int) -> list[str]:
     return path.read_text(encoding="utf-8", errors="replace").splitlines()[-max_lines:]
+
+
+def _read_properties(path: Path) -> dict[str, str]:
+    properties: dict[str, str] = {}
+    if not path.exists():
+        return properties
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        clean = line.strip().lstrip("\ufeff")
+        if not clean or clean.startswith("#") or "=" not in clean:
+            continue
+        key, value = clean.split("=", 1)
+        properties[key.strip()] = value.strip()
+    return properties
+
+
+def _write_properties(path: Path, properties: dict[str, str]) -> None:
+    lines = [f"{key}={value}" for key, value in sorted(properties.items())]
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def _read_compatibility_summary(server_dir: Path) -> dict[str, object]:

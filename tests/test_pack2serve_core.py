@@ -764,10 +764,115 @@ class Pack2ServeCoreTests(unittest.TestCase):
             self.assertEqual(log["runtimeStatus"], "stopped")
             self.assertEqual(log["lines"], ["line 5", "line 6", "line 7"])
 
+    def test_panel_service_updates_server_properties(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            tmp_path = Path(temp)
+            server_dir = tmp_path / "workspace/servers/sample-server"
+            (server_dir / "pack2serve").mkdir(parents=True)
+            (server_dir / "server.properties").write_text("server-port=25565\nmotd=Old\n", encoding="utf-8")
+            _write_minimal_build_report(server_dir, name="Sample Server")
+
+            service = PanelService(tmp_path / "workspace", advertise_host="127.0.0.1")
+            saved = service.save_server_properties("sample-server", {"motd": "New", "difficulty": "hard"})
+
+            self.assertEqual(saved["properties"]["motd"], "New")
+            self.assertEqual(saved["properties"]["difficulty"], "hard")
+            self.assertIn("motd=New", (server_dir / "server.properties").read_text(encoding="utf-8"))
+
+    def test_panel_service_sends_console_command_to_running_server(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            tmp_path = Path(temp)
+            server_dir = tmp_path / "workspace/servers/sample-server"
+            (server_dir / "pack2serve").mkdir(parents=True)
+            (server_dir / "server.properties").write_text("server-port=25655\n", encoding="utf-8")
+            _write_minimal_build_report(server_dir, name="Runnable Sample")
+            commands_file = tmp_path / "commands.txt"
+            fake_server = tmp_path / "fake_server.py"
+            fake_server.write_text(
+                "import pathlib, sys\n"
+                f"commands = pathlib.Path({str(commands_file)!r})\n"
+                "print('Done (0.1s)! For help, type \"help\"', flush=True)\n"
+                "for line in sys.stdin:\n"
+                "    commands.write_text(commands.read_text() + line, encoding='utf-8') if commands.exists() else commands.write_text(line, encoding='utf-8')\n"
+                "    print('ran ' + line.strip(), flush=True)\n"
+                "    if line.strip() == 'stop':\n"
+                "        break\n",
+                encoding="utf-8",
+            )
+            (server_dir / "start.ps1").write_text(f"& python '{fake_server}'\n", encoding="utf-8")
+
+            service = PanelService(tmp_path / "workspace", advertise_host="127.0.0.1")
+            service.start_server("sample-server")
+            deadline = time.time() + 10
+            while service.server_runtime_status("sample-server")["runtimeStatus"] != "running" and time.time() < deadline:
+                time.sleep(0.05)
+
+            result = service.send_console_command("sample-server", "say hello")
+            service.stop_server("sample-server")
+
+            self.assertEqual(result["command"], "say hello")
+            self.assertIn("say hello", commands_file.read_text(encoding="utf-8"))
+
+    def test_panel_service_creates_project_job_and_accepts_eula(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            tmp_path = Path(temp)
+            pack = tmp_path / "sample.mrpack"
+            write_zip(
+                pack,
+                {
+                    "modrinth.index.json": json.dumps(
+                        {
+                            "formatVersion": 1,
+                            "game": "minecraft",
+                            "name": "Job Sample",
+                            "versionId": "1.0.0",
+                            "dependencies": {"minecraft": "1.20.1", "fabric-loader": "0.18.4"},
+                            "files": [],
+                        }
+                    )
+                },
+            )
+            service = PanelService(tmp_path / "workspace", advertise_host="127.0.0.1")
+
+            job = service.create_project(pack, project_name="Job Server", accept_eula=True, download=False)
+            deadline = time.time() + 10
+            current = service.project_job(job["jobId"])
+            while current["status"] in {"queued", "running"} and time.time() < deadline:
+                time.sleep(0.05)
+                current = service.project_job(job["jobId"])
+
+            self.assertEqual(current["status"], "completed")
+            self.assertEqual(current["progress"], 100)
+            self.assertTrue((tmp_path / "workspace/servers/job-server/eula.txt").read_text(encoding="utf-8").strip().endswith("eula=true"))
+
+    def test_panel_service_reads_players_from_logs(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            tmp_path = Path(temp)
+            server_dir = tmp_path / "workspace/servers/sample-server"
+            (server_dir / "pack2serve").mkdir(parents=True)
+            (server_dir / "logs").mkdir()
+            (server_dir / "server.properties").write_text("server-port=25565\n", encoding="utf-8")
+            (server_dir / "logs/panel-server.log").write_text(
+                "[Server thread/INFO]: Alice joined the game\n"
+                "[Server thread/INFO]: Bob joined the game\n"
+                "[Server thread/INFO]: Alice left the game\n",
+                encoding="utf-8",
+            )
+            _write_minimal_build_report(server_dir, name="Sample Server")
+
+            service = PanelService(tmp_path / "workspace", advertise_host="127.0.0.1")
+            players = service.server_players("sample-server")
+
+            self.assertEqual([player["name"] for player in players["players"]], ["Bob"])
+            self.assertEqual(players["players"][0]["gameMode"], "unknown")
+
     def test_panel_html_preserves_javascript_backslash_escaping(self) -> None:
         self.assertIn('replace(/\\\\/g, "\\\\\\\\")', PANEL_HTML)
         self.assertNotIn("replace(/\\/g, \"\\\\\")", PANEL_HTML)
-        self.assertIn('split(/\\\\r?\\\\n/)', PANEL_HTML)
+        self.assertGreaterEqual(PANEL_HTML.count("split(/\\r?\\n/)"), 2)
+        self.assertIn('id="projectGrid"', PANEL_HTML)
+        self.assertIn('id="createDialog"', PANEL_HTML)
+        self.assertIn('id="consoleCommand"', PANEL_HTML)
 
     def test_compatibility_audit_requires_startup_validation_for_equivalence(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
