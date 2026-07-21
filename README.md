@@ -20,7 +20,7 @@
 </p>
 
 <p align="center">
-  <img src=".github/assets/readme-hero.svg" alt="Pack2Serve project overview image" />
+  <img src=".github/assets/readme-hero-scroll.svg" alt="Pack2Serve project overview image" />
 </p>
 
 ## Screenshots
