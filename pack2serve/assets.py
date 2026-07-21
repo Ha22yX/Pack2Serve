@@ -21,11 +21,6 @@ def resolve_item_icon_data_url(server_dir: Path, item_id: str) -> str | None:
     if cache_key in _ICON_CACHE:
         return _ICON_CACHE[cache_key]
     namespace, item_name = _split_item_id(item_id)
-    for archive_path in _resource_archives(server_dir):
-        icon = _resolve_item_icon_from_archive(archive_path, namespace, item_name)
-        if icon:
-            _ICON_CACHE[cache_key] = icon
-            return icon
     for root in _resource_directories(server_dir):
         icon = _resolve_item_icon_from_directory(root, namespace, item_name)
         if icon:
@@ -37,6 +32,11 @@ def resolve_item_icon_data_url(server_dir: Path, item_id: str) -> str | None:
             if icon:
                 _ICON_CACHE[cache_key] = icon
                 return icon
+    for archive_path in _resource_archives(server_dir):
+        icon = _resolve_item_icon_from_archive(archive_path, namespace, item_name)
+        if icon:
+            _ICON_CACHE[cache_key] = icon
+            return icon
     _ICON_CACHE[cache_key] = None
     return None
 
@@ -68,11 +68,14 @@ def _minecraft_client_archives(server_dir: Path) -> list[Path]:
             if path.is_file():
                 archives.append(path)
     version = _minecraft_version(server_dir)
+    pack_name = _pack_name(server_dir)
     for home in _minecraft_homes():
         if version:
             archives.extend(home.glob(f"libraries/net/minecraft/client/{version}-*/client-{version}-*-extra.jar"))
             archives.extend(home.glob(f"libraries/net/minecraft/client/{version}-*/client-{version}-*.jar"))
-        archives.extend(home.glob("versions/*/*.jar"))
+        if pack_name:
+            version_dir = home / "versions" / pack_name
+            archives.extend(version_dir.glob("*.jar"))
     seen: set[Path] = set()
     unique: list[Path] = []
     for path in archives:
@@ -110,6 +113,18 @@ def _minecraft_version(server_dir: Path) -> str:
     pack = report.get("pack") if isinstance(report, dict) else None
     if isinstance(pack, dict):
         return str(pack.get("minecraft_version") or "")
+    return ""
+
+
+def _pack_name(server_dir: Path) -> str:
+    report_path = server_dir / "pack2serve" / "build-report.json"
+    try:
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return ""
+    pack = report.get("pack") if isinstance(report, dict) else None
+    if isinstance(pack, dict):
+        return str(pack.get("name") or "")
     return ""
 
 

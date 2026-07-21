@@ -982,7 +982,7 @@ PANEL_HTML = r"""<!doctype html>
     const VALID_TABS = new Set(["status", "logs", "properties", "players", "mods", "worlds", "files"]);
     const HOME_ROUTE = "#/projects";
     const ACTIVE_JOB_STORAGE_KEY = "pack2serve.activeJobId";
-    const state = { servers: [], selected: null, tab: "status", jobId: "", jobTimer: null, showInternal: false, players: [], onlinePlayers: [], offlinePlayers: [], selectedPlayer: "", selectedPlayerSource: "online", playerInventory: null, inventoryLoading: false, inventoryAutoTimer: null, renderedPlayerKey: "", creatingProject: false, filePath: "", logPinnedToBottom: true, pendingPlayerAction: null };
+    const state = { servers: [], selected: null, tab: "status", jobId: "", jobTimer: null, showInternal: false, players: [], onlinePlayers: [], offlinePlayers: [], selectedPlayer: "", selectedPlayerSource: "online", playerInventory: null, inventoryLoading: false, inventoryAutoTimer: null, inventoryRequestId: 0, renderedPlayerKey: "", creatingProject: false, filePath: "", logPinnedToBottom: true, pendingPlayerAction: null };
 
     async function api(path, options = {}) {
       const headers = options.body instanceof FormData ? {} : { "Content-Type": "application/json" };
@@ -1101,6 +1101,7 @@ PANEL_HTML = r"""<!doctype html>
         state.selectedPlayer = "";
         state.playerInventory = null;
         state.renderedPlayerKey = "";
+        state.inventoryRequestId += 1;
         stopInventoryAutoRefresh();
         $("detailView").classList.add("hidden");
         $("homeView").classList.remove("hidden");
@@ -1117,6 +1118,7 @@ PANEL_HTML = r"""<!doctype html>
         state.selectedPlayer = "";
         state.playerInventory = null;
         state.renderedPlayerKey = "";
+        state.inventoryRequestId += 1;
         stopInventoryAutoRefresh();
         state.filePath = "";
       }
@@ -1313,7 +1315,10 @@ PANEL_HTML = r"""<!doctype html>
       const changedPlayer = state.renderedPlayerKey !== nextKey;
       state.selectedPlayer = name;
       state.selectedPlayerSource = source;
-      if (changedPlayer) state.playerInventory = null;
+      if (changedPlayer) {
+        state.playerInventory = null;
+        state.inventoryRequestId += 1;
+      }
       state.inventoryLoading = false;
       renderPlayerDetail({ force: true });
       if (source === "online") runAction(() => playerAction("probe", { player: name }));
@@ -1325,6 +1330,7 @@ PANEL_HTML = r"""<!doctype html>
       const player = selectedPlayerRecord();
       if (!player) {
         state.renderedPlayerKey = "";
+        state.inventoryRequestId += 1;
         stopInventoryAutoRefresh();
         renderPlayerDetail({ force: true });
         return;
@@ -1400,16 +1406,19 @@ PANEL_HTML = r"""<!doctype html>
       if (state.inventoryLoading) return;
       if (auto && state.tab !== "players") return;
       state.inventoryLoading = true;
+      const requestId = state.inventoryRequestId + 1;
+      state.inventoryRequestId = requestId;
       updateInventoryLoadingState();
       try {
         const requestKey = `${state.selected.targetName}:${state.selectedPlayerSource}:${state.selectedPlayer}`;
         const payload = await api(`/api/servers/player-inventory?targetName=${encodeURIComponent(state.selected.targetName)}&player=${encodeURIComponent(state.selectedPlayer)}&source=${encodeURIComponent(state.selectedPlayerSource)}`);
-        if (requestKey !== `${state.selected?.targetName}:${state.selectedPlayerSource}:${state.selectedPlayer}`) return;
+        if (requestId !== state.inventoryRequestId || requestKey !== `${state.selected?.targetName}:${state.selectedPlayerSource}:${state.selectedPlayer}`) return;
         state.playerInventory = payload.inventory;
         reconcileInventoryPanel(payload.inventory, { force });
         updateInventorySummary();
         if (payload.inventory.status === "probing") setTimeout(() => loadPlayerInventory({ force }).catch(() => {}), 700);
       } finally {
+        if (requestId !== state.inventoryRequestId) return;
         state.inventoryLoading = false;
         updateInventoryLoadingState();
       }

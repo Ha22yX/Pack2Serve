@@ -2438,6 +2438,7 @@ class Pack2ServeCoreTests(unittest.TestCase):
         self.assertIn("function startInventoryAutoRefresh", PANEL_HTML)
         self.assertIn("setInterval(() => loadPlayerInventory({ auto: true })", PANEL_HTML)
         self.assertIn("10000", PANEL_HTML)
+        self.assertIn("inventoryRequestId", PANEL_HTML)
         self.assertIn("data-slot-key", PANEL_HTML)
         self.assertIn("data-signature", PANEL_HTML)
         self.assertIn("updateInventoryLoadingState", PANEL_HTML)
