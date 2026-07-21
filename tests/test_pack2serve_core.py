@@ -1996,6 +1996,45 @@ class Pack2ServeCoreTests(unittest.TestCase):
             self.assertEqual([player["name"] for player in players["players"]], ["Bob"])
             self.assertEqual(players["players"][0]["gameMode"], "unknown")
 
+    def test_panel_service_clears_stale_players_from_latest_list_output(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            tmp_path = Path(temp)
+            server_dir = tmp_path / "workspace/servers/sample-server"
+            (server_dir / "pack2serve").mkdir(parents=True)
+            (server_dir / "logs").mkdir()
+            (server_dir / "server.properties").write_text("server-port=25565\n", encoding="utf-8")
+            (server_dir / "logs/panel-server.log").write_text(
+                "[Server thread/INFO]: Alice joined the game\n"
+                "[Server thread/INFO]: There are 0 of a max of 20 players online:\n",
+                encoding="utf-8",
+            )
+            _write_minimal_build_report(server_dir, name="Sample Server")
+
+            service = PanelService(tmp_path / "workspace", advertise_host="127.0.0.1")
+            players = service.server_players("sample-server")
+
+            self.assertEqual(players["players"], [])
+            self.assertEqual(players["onlinePlayers"], [])
+
+    def test_panel_service_removes_players_on_lost_connection_logs(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            tmp_path = Path(temp)
+            server_dir = tmp_path / "workspace/servers/sample-server"
+            (server_dir / "pack2serve").mkdir(parents=True)
+            (server_dir / "logs").mkdir()
+            (server_dir / "server.properties").write_text("server-port=25565\n", encoding="utf-8")
+            (server_dir / "logs/panel-server.log").write_text(
+                "[Server thread/INFO]: Alice joined the game\n"
+                "[Server thread/INFO]: Alice lost connection: Disconnected\n",
+                encoding="utf-8",
+            )
+            _write_minimal_build_report(server_dir, name="Sample Server")
+
+            service = PanelService(tmp_path / "workspace", advertise_host="127.0.0.1")
+            players = service.server_players("sample-server")
+
+            self.assertEqual(players["players"], [])
+
     def test_panel_service_parses_player_details_from_command_logs(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             tmp_path = Path(temp)
@@ -2047,9 +2086,10 @@ class Pack2ServeCoreTests(unittest.TestCase):
                 service.server_players("sample-server")
                 service.server_players("sample-server")
 
+            send.assert_any_call("sample-server", "list")
             send.assert_any_call("sample-server", "data get entity Alice Pos")
             send.assert_any_call("sample-server", "data get entity Alice Rotation")
-            self.assertEqual(send.call_count, 2)
+            self.assertEqual(send.call_count, 3)
 
     def test_panel_service_lists_and_manages_mod_files(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

@@ -82,6 +82,7 @@ class PanelService:
         self._running: dict[str, RunningServer] = {}
         self._jobs: dict[str, ProjectJob] = {}
         self._player_probe_at: dict[tuple[str, str], float] = {}
+        self._player_list_probe_at: dict[str, float] = {}
         self._lock = threading.RLock()
 
     def import_pack(
@@ -517,6 +518,7 @@ class PanelService:
     def server_players(self, target_name: str) -> dict[str, object]:
         server_dir = self._server_dir(target_name)
         log_path = server_dir / "logs" / "panel-server.log"
+        self._auto_probe_player_list(target_name)
         players = _players_from_log(log_path)
         self._auto_probe_online_players(target_name, players)
         online_players = list(players.values())
@@ -609,6 +611,20 @@ class PanelService:
             except ValueError:
                 return False
         return True
+
+    def _auto_probe_player_list(self, target_name: str) -> None:
+        with self._lock:
+            running = self._running.get(target_name)
+            if not running or running.process.poll() is not None or not running.process.stdin:
+                return
+        now = time.monotonic()
+        if now - self._player_list_probe_at.get(target_name, 0) < 2.8:
+            return
+        self._player_list_probe_at[target_name] = now
+        try:
+            self.send_console_command(target_name, "list")
+        except ValueError:
+            return
 
     def _auto_probe_online_players(self, target_name: str, players: dict[str, dict[str, object]]) -> None:
         if not players:
@@ -1342,6 +1358,37 @@ def _normalize_server_setting(key: str, value: object) -> str:
     return str(value).replace("\r", "").replace("\n", " ").strip()
 
 
+def _log_player(name: str, previous: dict[str, object] | None = None) -> dict[str, object]:
+    previous = previous or {}
+    return {
+        "name": name,
+        "status": "online",
+        "gameMode": previous.get("gameMode", "unknown"),
+        "position": previous.get("position"),
+        "rotation": previous.get("rotation"),
+        "respawnPoint": previous.get("respawnPoint"),
+        "skinUrl": f"https://minotar.net/avatar/{name}/64",
+        "inventory": previous.get("inventory", []),
+        "source": "log",
+    }
+
+
+def _parse_player_list_names(line: str) -> set[str] | None:
+    latest = re.search(
+        r"There are\s+(\d+)(?:\s+of\s+a\s+max\s+of\s+|/\s*)(\d+)\s+players online:\s*(.*)$",
+        line,
+    )
+    if not latest:
+        return None
+    count = int(latest.group(1))
+    names = {
+        name
+        for name in re.findall(r"\b[A-Za-z0-9_]{1,16}\b", latest.group(3))
+        if name.lower() not in {"and"}
+    }
+    return names if count else set()
+
+
 def _players_from_log(log_path: Path) -> dict[str, dict[str, object]]:
     players: dict[str, dict[str, object]] = {}
     if not log_path.exists():
@@ -1349,21 +1396,13 @@ def _players_from_log(log_path: Path) -> dict[str, dict[str, object]]:
     for line in log_path.read_text(encoding="utf-8", errors="replace").splitlines():
         joined = re.search(r": ([A-Za-z0-9_]{1,16}) joined the game", line)
         left = re.search(r": ([A-Za-z0-9_]{1,16}) left the game", line)
+        lost = re.search(r": ([A-Za-z0-9_]{1,16}) lost connection:", line)
         mode = re.search(r"Set ([A-Za-z0-9_]{1,16})'s game mode to ([A-Za-z ]+)", line)
         entity = re.search(r": ([A-Za-z0-9_]{1,16}) has the following entity data: \[(.+)\]", line)
+        listed_names = _parse_player_list_names(line)
         if joined:
             name = joined.group(1)
-            players[name] = {
-                "name": name,
-                "status": "online",
-                "gameMode": players.get(name, {}).get("gameMode", "unknown"),
-                "position": players.get(name, {}).get("position"),
-                "rotation": players.get(name, {}).get("rotation"),
-                "respawnPoint": players.get(name, {}).get("respawnPoint"),
-                "skinUrl": f"https://minotar.net/avatar/{name}/64",
-                "inventory": [],
-                "source": "log",
-            }
+            players[name] = _log_player(name, players.get(name))
         if mode and mode.group(1) in players:
             players[mode.group(1)]["gameMode"] = _normalize_game_mode(mode.group(2))
         if entity and entity.group(1) in players:
@@ -1372,8 +1411,10 @@ def _players_from_log(log_path: Path) -> dict[str, dict[str, object]]:
                 players[entity.group(1)]["position"] = {"x": vector[0], "y": vector[1], "z": vector[2]}
             elif len(vector) == 2:
                 players[entity.group(1)]["rotation"] = {"yaw": vector[0], "pitch": vector[1]}
-        if left:
-            players.pop(left.group(1), None)
+        if left or lost:
+            players.pop((left or lost).group(1), None)
+        if listed_names is not None:
+            players = {name: _log_player(name, players.get(name)) for name in sorted(listed_names)}
     return players
 
 
