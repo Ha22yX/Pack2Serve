@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 import urllib.error
 import urllib.request
@@ -201,7 +202,10 @@ class CurseForgeMavenProvider:
 
 
 def default_curseforge_providers() -> list[object]:
-    return [CurseForgeApiProvider(), CurseForgeMavenProvider()]
+    providers: list[object] = [CurseForgeMavenProvider()]
+    if os.environ.get("PACK2SERVE_CURSEFORGE_API_KEY") or os.environ.get("CURSEFORGE_API_KEY"):
+        providers.insert(0, CurseForgeApiProvider())
+    return providers
 
 
 class CurseForgeResolutionError(DownloadError):
