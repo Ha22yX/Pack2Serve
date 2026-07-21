@@ -19,6 +19,10 @@
   <img alt="Status" src="https://img.shields.io/badge/status-active%20prototype-F0B429?style=for-the-badge" />
 </p>
 
+<p align="center">
+  <img src=".github/assets/readme-hero.svg" alt="Pack2Serve project overview image" />
+</p>
+
 ## Screenshots
 
 <table>
