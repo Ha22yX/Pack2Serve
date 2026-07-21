@@ -460,7 +460,7 @@ PANEL_HTML = r"""<!doctype html>
     }
     .summary-row {
       display: grid;
-      grid-template-columns: repeat(4, minmax(0, 1fr));
+      grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 12px;
       margin-bottom: 18px;
     }
@@ -709,8 +709,6 @@ PANEL_HTML = r"""<!doctype html>
         <div class="summary-row">
           <div class="metric"><span class="subtle">项目总数</span><strong id="metricTotal">0</strong></div>
           <div class="metric"><span class="subtle">运行中</span><strong id="metricRunning">0</strong></div>
-          <div class="metric"><span class="subtle">等价验证</span><strong id="metricVerified">0</strong></div>
-          <div class="metric"><span class="subtle">需复核</span><strong id="metricReview">0</strong></div>
         </div>
         <div id="activeJob" class="progress-card hidden">
           <div class="panel-head">
@@ -890,8 +888,6 @@ PANEL_HTML = r"""<!doctype html>
     function renderHome() {
       $("metricTotal").textContent = state.servers.length;
       $("metricRunning").textContent = state.servers.filter((server) => server.runtimeStatus === "running").length;
-      $("metricVerified").textContent = state.servers.filter((server) => server.serverEquivalent).length;
-      $("metricReview").textContent = state.servers.filter((server) => !server.serverEquivalent).length;
       $("projectGrid").innerHTML = state.servers.map(cardTemplate).join("") || `<div class="panel"><h3>还没有正式项目</h3><p class="subtle">点击右上角创建项目，选择 .mrpack 或 .zip 整合包生成服务端。</p></div>`;
     }
 
@@ -1507,8 +1503,6 @@ PANEL_HTML = r"""<!doctype html>
     function renderHome() {
       $("metricTotal").textContent = state.servers.length;
       $("metricRunning").textContent = state.servers.filter((server) => server.runtimeStatus === "running").length;
-      $("metricVerified").textContent = state.servers.filter((server) => server.serverEquivalent).length;
-      $("metricReview").textContent = state.servers.filter((server) => !server.serverEquivalent).length;
       $("projectGrid").innerHTML = state.servers.map(cardTemplate).join("") || emptyProjects();
     }
 

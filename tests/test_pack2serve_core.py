@@ -1602,6 +1602,12 @@ class Pack2ServeCoreTests(unittest.TestCase):
         self.assertNotIn("deleteProject('${escapeAttr(server.targetName)}')", card_template)
         self.assertNotIn("event.stopPropagation(); openProject('${escapeAttr(server.targetName)}')", card_template)
 
+    def test_panel_home_does_not_show_equivalence_review_metrics(self) -> None:
+        self.assertNotIn('id="metricVerified"', PANEL_HTML)
+        self.assertNotIn('id="metricReview"', PANEL_HTML)
+        self.assertNotIn("$('metricVerified')", PANEL_HTML)
+        self.assertNotIn("$('metricReview')", PANEL_HTML)
+
     def test_panel_runtime_overview_connection_address_can_be_copied(self) -> None:
         refresh_metrics = PANEL_HTML.split("async function refreshMetrics()", 1)[1].split("async function refreshLogs", 1)[0]
         copy_metric_card = PANEL_HTML.split("function copyMetricCard(label, value)", 1)[1].split("async function refreshLogs", 1)[0]
