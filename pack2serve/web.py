@@ -544,13 +544,27 @@ PANEL_HTML = r"""<!doctype html>
       margin-bottom: 12px;
     }
     .mini-card {
+      position: relative;
       border: 1px solid var(--line);
       border-radius: 8px;
       background: #fffefa;
       padding: 12px;
       min-height: 74px;
     }
-    .mini-card strong { display: block; margin-top: 5px; font-size: 16px; }
+    .mini-card strong { display: block; margin-top: 5px; font-size: 16px; overflow-wrap: anywhere; }
+    .mini-card.with-copy { padding-right: 72px; }
+    .mini-copy {
+      position: absolute;
+      right: 10px;
+      top: 10px;
+      min-height: 28px;
+      border-radius: 8px;
+      padding: 4px 8px;
+      background: #e4e1d7;
+      color: var(--ink);
+      font-size: 12px;
+      font-weight: 760;
+    }
     .players { display: grid; gap: 8px; }
     .player-row { display: flex; justify-content: space-between; border: 1px solid var(--line); border-radius: 8px; padding: 10px; background: #fffefa; cursor: pointer; }
     .player-row.active { border-color: var(--accent); box-shadow: 0 0 0 3px rgb(22 114 95 / .12); }
@@ -945,7 +959,7 @@ PANEL_HTML = r"""<!doctype html>
     }
 
     function copyMetricCard(label, value) {
-      return `<div class="mini-card"><span class="subtle">${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong><div class="card-actions"><button class="secondary" onclick="runAction(() => copyAddress('${escapeAttr(value)}'))">复制地址</button></div></div>`;
+      return `<div class="mini-card with-copy"><button class="mini-copy" onclick="runAction(() => copyAddress('${escapeAttr(value)}'))">复制</button><span class="subtle">${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`;
     }
 
     async function refreshLogs() {

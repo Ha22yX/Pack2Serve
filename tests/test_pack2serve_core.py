@@ -1453,10 +1453,13 @@ class Pack2ServeCoreTests(unittest.TestCase):
 
     def test_panel_runtime_overview_connection_address_can_be_copied(self) -> None:
         refresh_metrics = PANEL_HTML.split("async function refreshMetrics()", 1)[1].split("async function refreshLogs", 1)[0]
+        copy_metric_card = PANEL_HTML.split("function copyMetricCard(label, value)", 1)[1].split("async function refreshLogs", 1)[0]
 
         self.assertIn("copyMetricCard(\"连接地址\", metrics.runtime.connectAddress)", refresh_metrics)
         self.assertIn("copyAddress('${escapeAttr(value)}')", refresh_metrics)
-        self.assertIn("复制地址", refresh_metrics)
+        self.assertIn("mini-copy", copy_metric_card)
+        self.assertNotIn("card-actions", copy_metric_card)
+        self.assertIn(">复制</button>", refresh_metrics)
 
     def test_panel_upload_multipart_parser_reads_pack_file_and_fields(self) -> None:
         boundary = "pack2serve-boundary"
