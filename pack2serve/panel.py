@@ -15,6 +15,8 @@ from typing import TextIO
 from pack2serve.builder import ServerBuilder
 from pack2serve.downloader import ArtifactCache, CurseForgeTemplateMirrorProvider, default_curseforge_providers
 from pack2serve.eula import accept_eula as accept_server_eula
+from pack2serve.installer import LoaderInstaller, load_loader_plan
+from pack2serve.java import JavaInstaller, load_java_runtime_install_plan
 
 
 @dataclass
@@ -138,12 +140,27 @@ class PanelService:
                 download_remote=download,
                 curseforge_providers=providers,
             ).build(pack_path, target)
+            assigned_port = self._assign_server_port(target)
+            self._append_job_log(job_id, f"服务端端口: {assigned_port}")
+            auxiliary_ports = self._assign_auxiliary_ports(target)
+            for name, port in auxiliary_ports.items():
+                self._append_job_log(job_id, f"{name} 端口: {port}")
             self._append_job_log(job_id, f"远程文件: {len(report.downloads)}")
             self._append_job_log(job_id, f"人工项: {len(report.manual_actions)}")
-            self._update_job(job_id, stage="eula", progress=76, message="写入 EULA 接受状态")
+            self._update_job(job_id, stage="java", progress=56, message="安装匹配的 Java 运行时")
+            java_plan = load_java_runtime_install_plan(target / "pack2serve" / "java-runtime-install-plan.json")
+            java_result = JavaInstaller().install(target, java_plan)
+            self._append_job_log(job_id, f"Java 安装: {java_result.status}")
+            self._update_job(job_id, stage="loader", progress=72, message="安装服务端启动文件")
+            loader_plan = load_loader_plan(target / "pack2serve" / "loader-install-plan.json")
+            loader_result = LoaderInstaller().install(target, loader_plan, execute_installers=True)
+            self._append_job_log(job_id, f"Loader 安装: {loader_result.status}")
+            if loader_result.status == "failed":
+                raise RuntimeError("Loader installation failed. Check pack2serve/loader-install-result.json.")
+            self._update_job(job_id, stage="eula", progress=82, message="写入 EULA 接受状态")
             if accept_eula:
                 accept_server_eula(target)
-            self._update_job(job_id, stage="finalize", progress=92, message="生成项目摘要")
+            self._update_job(job_id, stage="finalize", progress=94, message="生成项目摘要")
             summary = _summary_from_report(target_name, report.to_json_dict())
             summary.update(self.server_runtime_status(target_name))
             with self._lock:
@@ -355,6 +372,38 @@ class PanelService:
             },
         }
 
+    def _assign_server_port(self, target: Path) -> int:
+        used_ports = {
+            _read_server_port(path.parent)
+            for path in self.servers_dir.glob("**/server.properties")
+            if path.parent.resolve() != target.resolve()
+        }
+        port = _next_available_port(25565, 25665, used_ports, udp=False)
+        properties = _read_properties(target / "server.properties")
+        properties["server-port"] = str(port)
+        if "query.port" in properties:
+            properties["query.port"] = str(port)
+        _write_properties(target / "server.properties", properties)
+        return port
+
+    def _assign_auxiliary_ports(self, target: Path) -> dict[str, int]:
+        assigned: dict[str, int] = {}
+        voicechat = target / "config" / "voicechat" / "voicechat-server.properties"
+        if voicechat.exists():
+            used_ports = {
+                int(properties["port"])
+                for properties_path in self.servers_dir.glob("**/config/voicechat/voicechat-server.properties")
+                if properties_path.parent.parent.parent.resolve() != target.resolve()
+                for properties in [_read_properties(properties_path)]
+                if properties.get("port", "").isdigit()
+            }
+            port = _next_available_port(24454, 24554, used_ports, udp=True)
+            properties = _read_properties(voicechat)
+            properties["port"] = str(port)
+            _write_properties(voicechat, properties)
+            assigned["voicechat"] = port
+        return assigned
+
     def _curseforge_providers(self, mirrors: list[str]) -> list[object]:
         cache = ArtifactCache(self.cache_dir)
         providers: list[object] = default_curseforge_providers()
@@ -498,6 +547,26 @@ def _display_host(configured_host: str) -> str:
         return next((ip for ip in candidates if not ip.startswith("127.")), "127.0.0.1")
     except OSError:
         return "127.0.0.1"
+
+
+def _next_available_port(start: int, stop: int, used_ports: set[int], *, udp: bool) -> int:
+    for port in range(start, stop):
+        if port in used_ports:
+            continue
+        if _is_port_available(port, udp=udp):
+            return port
+    raise RuntimeError(f"No available port found in range {start}-{stop - 1}.")
+
+
+def _is_port_available(port: int, *, udp: bool = False) -> bool:
+    kind = socket.SOCK_DGRAM if udp else socket.SOCK_STREAM
+    with socket.socket(socket.AF_INET, kind) as probe:
+        probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            probe.bind(("", port))
+        except OSError:
+            return False
+    return True
 
 
 def _write_log_line(log: TextIO, line: str) -> None:

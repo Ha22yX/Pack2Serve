@@ -7,6 +7,7 @@ import zipfile
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
+from unittest.mock import patch
 
 from pack2serve.builder import ServerBuilder
 from pack2serve.cli import main
@@ -855,21 +856,76 @@ class Pack2ServeCoreTests(unittest.TestCase):
                             "dependencies": {"minecraft": "1.20.1", "fabric-loader": "0.18.4"},
                             "files": [],
                         }
-                    )
+                    ),
+                    "overrides/config/voicechat/voicechat-server.properties": "port=24454\nbind_address=\n",
                 },
             )
+            existing = tmp_path / "workspace/servers/existing-server"
+            (existing / "pack2serve").mkdir(parents=True)
+            (existing / "config/voicechat").mkdir(parents=True)
+            (existing / "server.properties").write_text("server-port=25565\n", encoding="utf-8")
+            (existing / "config/voicechat/voicechat-server.properties").write_text("port=24454\n", encoding="utf-8")
+            _write_minimal_build_report(existing, name="Existing Server")
             service = PanelService(tmp_path / "workspace", advertise_host="127.0.0.1")
 
-            job = service.create_project(pack, project_name="Job Server", accept_eula=True, download=False)
-            deadline = time.time() + 10
-            current = service.project_job(job["jobId"])
-            while current["status"] in {"queued", "running"} and time.time() < deadline:
-                time.sleep(0.05)
-                current = service.project_job(job["jobId"])
+            def install_loader(server_dir: Path, plan: LoaderInstallPlan, *, execute_installers: bool = False):
+                (Path(server_dir) / plan.artifact_path).write_bytes(b"fabric-server")
+                return type(
+                    "Result",
+                    (),
+                    {
+                        "status": "installed",
+                        "to_json_dict": lambda self: {
+                            "status": "installed",
+                            "artifact_path": plan.artifact_path,
+                            "executed": execute_installers,
+                        },
+                    },
+                )()
 
-            self.assertEqual(current["status"], "completed")
-            self.assertEqual(current["progress"], 100)
-            self.assertTrue((tmp_path / "workspace/servers/job-server/eula.txt").read_text(encoding="utf-8").strip().endswith("eula=true"))
+            def install_java(server_dir: Path, plan: JavaRuntimeInstallPlan):
+                java = Path(server_dir) / plan.java_executable
+                java.parent.mkdir(parents=True, exist_ok=True)
+                java.write_bytes(b"java")
+                return type(
+                    "Result",
+                    (),
+                    {
+                        "status": "installed",
+                        "to_json_dict": lambda self: {
+                            "status": "installed",
+                            "java_executable": plan.java_executable,
+                        },
+                    },
+                )()
+
+            with patch("pack2serve.panel.JavaInstaller") as java_installer_class, patch(
+                "pack2serve.panel.LoaderInstaller"
+            ) as installer_class:
+                java_installer_class.return_value.install.side_effect = install_java
+                installer_class.return_value.install.side_effect = install_loader
+                job = service.create_project(pack, project_name="Job Server", accept_eula=True, download=False)
+                deadline = time.time() + 10
+                current = service.project_job(job["jobId"])
+                while current["status"] in {"queued", "running"} and time.time() < deadline:
+                    time.sleep(0.05)
+                    current = service.project_job(job["jobId"])
+
+                self.assertEqual(current["status"], "completed")
+                self.assertEqual(current["progress"], 100)
+                self.assertTrue((tmp_path / "workspace/servers/job-server/eula.txt").read_text(encoding="utf-8").strip().endswith("eula=true"))
+                self.assertIn(
+                    "server-port=25566",
+                    (tmp_path / "workspace/servers/job-server/server.properties").read_text(encoding="utf-8"),
+                )
+                voice_config = (
+                    tmp_path / "workspace/servers/job-server/config/voicechat/voicechat-server.properties"
+                ).read_text(encoding="utf-8")
+                self.assertIn("port=24455", voice_config)
+                self.assertEqual((tmp_path / "workspace/servers/job-server/server.jar").read_bytes(), b"fabric-server")
+                self.assertTrue((tmp_path / "workspace/servers/job-server/pack2serve/runtime/java/bin/java.exe").exists())
+                java_installer_class.return_value.install.assert_called_once()
+                installer_class.return_value.install.assert_called_once()
 
     def test_panel_service_reads_players_from_logs(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
