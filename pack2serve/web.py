@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import sys
 import uuid
 from dataclasses import dataclass
 from email.parser import BytesParser
@@ -23,6 +24,9 @@ def serve(host: str = "127.0.0.1", port: int = 8765, workspace_dir: str | Path =
     service = PanelService(workspace_dir=workspace_dir, advertise_host=host)
 
     class Pack2ServeHandler(BaseHTTPRequestHandler):
+        def log_message(self, format: str, *args: object) -> None:
+            return
+
         def do_GET(self) -> None:
             parsed = urlparse(self.path)
             route = parsed.path
@@ -273,7 +277,8 @@ def serve(host: str = "127.0.0.1", port: int = 8765, workspace_dir: str | Path =
 
     server = ThreadingHTTPServer((host, port), Pack2ServeHandler)
     service.cleanup_stale_server_processes()
-    print(f"Pack2Serve panel listening on http://{host}:{server.server_port}")
+    if sys.stdout:
+        print(f"Pack2Serve panel listening on http://{host}:{server.server_port}")
     try:
         server.serve_forever()
     finally:
