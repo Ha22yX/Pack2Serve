@@ -151,6 +151,26 @@ class PanelService:
             "logTail": last_lines,
         }
 
+    def server_log_tail(self, target_name: str, max_lines: int = 200) -> dict[str, object]:
+        max_lines = max(1, min(max_lines, 1000))
+        server_dir = self._server_dir(target_name)
+        log_path = server_dir / "logs" / "panel-server.log"
+        lines: list[str] = []
+        if log_path.exists():
+            lines = _tail_text_file(log_path, max_lines)
+        with self._lock:
+            running = self._running.get(target_name)
+            if running and running.last_lines and not lines:
+                lines = running.last_lines[-max_lines:]
+        status = self.server_runtime_status(target_name)
+        return {
+            "targetName": target_name,
+            "connectAddress": status["connectAddress"],
+            "runtimeStatus": status["runtimeStatus"],
+            "pid": status["pid"],
+            "lines": lines,
+        }
+
     def _curseforge_providers(self, mirrors: list[str]) -> list[object]:
         cache = ArtifactCache(self.cache_dir)
         providers: list[object] = default_curseforge_providers()
@@ -264,6 +284,10 @@ def _display_host(configured_host: str) -> str:
 def _write_log_line(log: TextIO, line: str) -> None:
     log.write(line)
     log.flush()
+
+
+def _tail_text_file(path: Path, max_lines: int) -> list[str]:
+    return path.read_text(encoding="utf-8", errors="replace").splitlines()[-max_lines:]
 
 
 def _kill_process_tree(proc: subprocess.Popen[str]) -> None:

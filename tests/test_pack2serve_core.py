@@ -742,6 +742,27 @@ class Pack2ServeCoreTests(unittest.TestCase):
             stopped = service.stop_server("sample-server")
             self.assertEqual(stopped["runtimeStatus"], "stopped")
 
+    def test_panel_service_reads_server_log_tail(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            tmp_path = Path(temp)
+            server_dir = tmp_path / "workspace/servers/startup-verification/sample-server"
+            (server_dir / "pack2serve").mkdir(parents=True)
+            (server_dir / "logs").mkdir()
+            (server_dir / "server.properties").write_text("server-port=25610\n", encoding="utf-8")
+            (server_dir / "logs/panel-server.log").write_text(
+                "\n".join(f"line {number}" for number in range(1, 8)) + "\n",
+                encoding="utf-8",
+            )
+            _write_minimal_build_report(server_dir, name="Sample Server")
+
+            service = PanelService(tmp_path / "workspace", advertise_host="127.0.0.1")
+            log = service.server_log_tail("startup-verification/sample-server", max_lines=3)
+
+            self.assertEqual(log["targetName"], "startup-verification/sample-server")
+            self.assertEqual(log["connectAddress"], "127.0.0.1:25610")
+            self.assertEqual(log["runtimeStatus"], "stopped")
+            self.assertEqual(log["lines"], ["line 5", "line 6", "line 7"])
+
     def test_panel_html_preserves_javascript_backslash_escaping(self) -> None:
         self.assertIn('replace(/\\\\/g, "\\\\\\\\")', PANEL_HTML)
         self.assertNotIn("replace(/\\/g, \"\\\\\")", PANEL_HTML)

@@ -6,7 +6,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from pack2serve.panel import PanelService
 
@@ -16,12 +16,19 @@ def serve(host: str = "127.0.0.1", port: int = 8765, workspace_dir: str | Path =
 
     class Pack2ServeHandler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
-            route = urlparse(self.path).path
+            parsed = urlparse(self.path)
+            route = parsed.path
             if route == "/":
                 self._send_html(PANEL_HTML)
                 return
             if route == "/api/servers":
                 self._send_json({"servers": service.list_servers()})
+                return
+            if route == "/api/servers/logs":
+                query = parse_qs(parsed.query)
+                target_name = query.get("targetName", [""])[0]
+                max_lines = int(query.get("maxLines", ["200"])[0])
+                self._send_json({"log": service.server_log_tail(target_name, max_lines=max_lines)})
                 return
             self._send_json({"error": "not found"}, status=HTTPStatus.NOT_FOUND)
 
@@ -227,6 +234,33 @@ PANEL_HTML = r"""<!doctype html>
       font-size: 13px;
       white-space: pre-wrap;
     }
+    .log-panel {
+      margin-top: 18px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #171b1f;
+      color: #e7efe9;
+      overflow: hidden;
+    }
+    .log-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 10px 12px;
+      border-bottom: 1px solid #303942;
+      color: #c7d1ca;
+      font-size: 12px;
+    }
+    .log-body {
+      height: 360px;
+      overflow: auto;
+      margin: 0;
+      padding: 12px;
+      font: 12px/1.45 Consolas, "Cascadia Mono", monospace;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
     @media (max-width: 860px) {
       main { grid-template-columns: 1fr; }
       section { border-right: 0; border-bottom: 1px solid var(--line); }
@@ -276,10 +310,18 @@ PANEL_HTML = r"""<!doctype html>
         </thead>
         <tbody id="servers"></tbody>
       </table>
+      <div class="log-panel">
+        <div class="log-head">
+          <strong id="logTitle">实时日志</strong>
+          <span id="logMeta">请选择一个服务端</span>
+        </div>
+        <pre class="log-body" id="logBody">点击表格里的“日志”，或点击“启动”后自动显示该服务端日志。</pre>
+      </div>
     </section>
   </main>
   <script>
     const $ = (id) => document.getElementById(id);
+    let selectedLogTarget = "";
     async function api(path, options = {}) {
       const response = await fetch(path, {
         headers: { "Content-Type": "application/json" },
@@ -307,6 +349,7 @@ PANEL_HTML = r"""<!doctype html>
           <td>
             <div class="actions">
               <button onclick="startServer('${escapeAttr(server.targetName)}')">启动</button>
+              <button class="secondary" onclick="showLogs('${escapeAttr(server.targetName)}')">日志</button>
               <button class="danger" onclick="stopServer('${escapeAttr(server.targetName)}')">停止</button>
             </div>
           </td>
@@ -317,6 +360,8 @@ PANEL_HTML = r"""<!doctype html>
       return String(value).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
     }
     async function startServer(targetName) {
+      selectedLogTarget = targetName;
+      await refreshLogs();
       $("status").textContent = `正在启动 ${targetName}...`;
       try {
         const payload = await api("/api/servers/start", {
@@ -325,9 +370,22 @@ PANEL_HTML = r"""<!doctype html>
         });
         $("status").textContent = `已发送启动命令：${payload.server.connectAddress}`;
         await refresh();
+        await refreshLogs();
       } catch (error) {
         $("status").textContent = error.message;
       }
+    }
+    async function showLogs(targetName) {
+      selectedLogTarget = targetName;
+      await refreshLogs();
+    }
+    async function refreshLogs() {
+      if (!selectedLogTarget) return;
+      const payload = await api(`/api/servers/logs?targetName=${encodeURIComponent(selectedLogTarget)}&maxLines=300`);
+      $("logTitle").textContent = selectedLogTarget;
+      $("logMeta").textContent = `${payload.log.runtimeStatus} · ${payload.log.connectAddress}`;
+      $("logBody").textContent = payload.log.lines.join("\n") || "暂无日志。";
+      $("logBody").scrollTop = $("logBody").scrollHeight;
     }
     async function stopServer(targetName) {
       $("status").textContent = `正在停止 ${targetName}...`;
@@ -338,12 +396,14 @@ PANEL_HTML = r"""<!doctype html>
         });
         $("status").textContent = `已发送停止命令：${targetName}`;
         await refresh();
+        await refreshLogs();
       } catch (error) {
         $("status").textContent = error.message;
       }
     }
     $("refresh").onclick = refresh;
     setInterval(() => refresh().catch(() => {}), 5000);
+    setInterval(() => refreshLogs().catch(() => {}), 2000);
     $("import").onclick = async () => {
       $("status").textContent = "处理中...";
       try {
