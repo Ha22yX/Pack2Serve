@@ -2441,9 +2441,9 @@ class Pack2ServeCoreTests(unittest.TestCase):
             with patch.dict("os.environ", {}, clear=True):
                 providers = _curseforge_providers(Path(temp) / "cache", [])
 
-        self.assertEqual([provider.name for provider in providers], ["curse-maven"])
+        self.assertEqual([provider.name for provider in providers], ["curse-tools", "curse-maven"])
 
-    def test_default_curseforge_providers_include_api_only_when_key_is_configured(self) -> None:
+    def test_default_curseforge_providers_keep_no_key_resolver_without_official_key(self) -> None:
         from pack2serve.downloader import default_curseforge_providers
 
         with patch.dict("os.environ", {}, clear=True):
@@ -2451,7 +2451,7 @@ class Pack2ServeCoreTests(unittest.TestCase):
         with patch.dict("os.environ", {"CURSEFORGE_API_KEY": "test-key"}, clear=True):
             with_key = default_curseforge_providers()
 
-        self.assertEqual([provider.name for provider in without_key], ["curse-maven"])
+        self.assertEqual([provider.name for provider in without_key], ["curse-tools", "curse-maven"])
         self.assertEqual([provider.name for provider in with_key], ["curse-tools", "curse-maven"])
 
     def test_cli_no_default_curseforge_providers_disables_defaults(self) -> None:
@@ -2506,7 +2506,7 @@ class Pack2ServeCoreTests(unittest.TestCase):
             with patch.dict("os.environ", {}, clear=True):
                 providers = service._curseforge_providers([])
 
-        self.assertEqual([provider.name for provider in providers], ["curse-maven"])
+        self.assertEqual([provider.name for provider in providers], ["curse-tools", "curse-maven"])
 
     def test_cli_install_loader_reads_plan_and_downloads_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
