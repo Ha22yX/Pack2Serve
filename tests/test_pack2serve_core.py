@@ -1,6 +1,7 @@
 import json
 import hashlib
 import tempfile
+import time
 import unittest
 import zipfile
 from contextlib import redirect_stdout
@@ -28,6 +29,31 @@ def write_zip(path: Path, files: dict[str, str | bytes]) -> None:
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as archive:
         for name, content in files.items():
             archive.writestr(name, content)
+
+
+def _write_minimal_build_report(server_dir: Path, *, name: str) -> None:
+    report = {
+        "pack": {
+            "source_path": "sample.mrpack",
+            "format": "modrinth",
+            "name": name,
+            "version": "1.0.0",
+            "minecraft_version": "1.20.1",
+            "loader": {"name": "fabric-loader", "version": "0.18.4"},
+            "override_root": "overrides",
+            "remote_files": [],
+        },
+        "target_dir": str(server_dir),
+        "java": {"required_major": 17, "detected_major": None, "detected_path": None, "status": "missing"},
+        "downloads": [],
+        "copied_overrides": [],
+        "manual_actions": [],
+        "curseforge_resolution": None,
+    }
+    (server_dir / "pack2serve/build-report.json").write_text(
+        json.dumps(report, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
 
 
 class Pack2ServeCoreTests(unittest.TestCase):
@@ -663,6 +689,57 @@ class Pack2ServeCoreTests(unittest.TestCase):
             self.assertTrue((tmp_path / "workspace/servers/my-server/pack2serve/build-report.json").exists())
             self.assertEqual(len(servers), 1)
             self.assertEqual(servers[0]["targetName"], "my-server")
+
+    def test_panel_service_lists_nested_generated_servers_with_connection_address(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            tmp_path = Path(temp)
+            server_dir = tmp_path / "workspace/servers/startup-verification/sample-server"
+            (server_dir / "pack2serve").mkdir(parents=True)
+            (server_dir / "server.properties").write_text("server-port=25610\n", encoding="utf-8")
+            _write_minimal_build_report(server_dir, name="Sample Server")
+
+            service = PanelService(tmp_path / "workspace", advertise_host="127.0.0.1")
+            servers = service.list_servers()
+
+            self.assertEqual(len(servers), 1)
+            self.assertEqual(servers[0]["targetName"], "startup-verification/sample-server")
+            self.assertEqual(servers[0]["connectAddress"], "127.0.0.1:25610")
+            self.assertEqual(servers[0]["runtimeStatus"], "stopped")
+
+    def test_panel_service_starts_and_stops_generated_server_process(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            tmp_path = Path(temp)
+            server_dir = tmp_path / "workspace/servers/sample-server"
+            (server_dir / "pack2serve").mkdir(parents=True)
+            (server_dir / "server.properties").write_text("server-port=25655\n", encoding="utf-8")
+            _write_minimal_build_report(server_dir, name="Runnable Sample")
+            fake_server = tmp_path / "fake_server.py"
+            fake_server.write_text(
+                "import sys\n"
+                "print('Done (0.1s)! For help, type \"help\"', flush=True)\n"
+                "for line in sys.stdin:\n"
+                "    if line.strip() == 'stop':\n"
+                "        print('Stopping server', flush=True)\n"
+                "        break\n",
+                encoding="utf-8",
+            )
+            (server_dir / "start.ps1").write_text(f"& python '{fake_server}'\n", encoding="utf-8")
+
+            service = PanelService(tmp_path / "workspace", advertise_host="127.0.0.1")
+            started = service.start_server("sample-server")
+            self.assertEqual(started["runtimeStatus"], "starting")
+
+            deadline = time.time() + 10
+            status = service.server_runtime_status("sample-server")
+            while status["runtimeStatus"] != "running" and time.time() < deadline:
+                time.sleep(0.05)
+                status = service.server_runtime_status("sample-server")
+
+            self.assertEqual(status["runtimeStatus"], "running")
+            self.assertEqual(status["connectAddress"], "127.0.0.1:25655")
+
+            stopped = service.stop_server("sample-server")
+            self.assertEqual(stopped["runtimeStatus"], "stopped")
 
     def test_curseforge_template_mirror_downloads_project_file_pair(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

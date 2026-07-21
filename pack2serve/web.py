@@ -12,7 +12,7 @@ from pack2serve.panel import PanelService
 
 
 def serve(host: str = "127.0.0.1", port: int = 8765, workspace_dir: str | Path = "data") -> None:
-    service = PanelService(workspace_dir=workspace_dir)
+    service = PanelService(workspace_dir=workspace_dir, advertise_host=host)
 
     class Pack2ServeHandler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
@@ -37,6 +37,12 @@ def serve(host: str = "127.0.0.1", port: int = 8765, workspace_dir: str | Path =
                         curseforge_mirrors=list(payload.get("curseforgeMirrors", [])),
                     )
                     self._send_json({"server": result})
+                    return
+                if route == "/api/servers/start":
+                    self._send_json({"server": service.start_server(payload["targetName"])})
+                    return
+                if route == "/api/servers/stop":
+                    self._send_json({"server": service.stop_server(payload["targetName"])})
                     return
                 self._send_json({"error": "not found"}, status=HTTPStatus.NOT_FOUND)
             except Exception as exc:
@@ -91,7 +97,7 @@ PANEL_HTML = """<!doctype html>
   <style>
     :root {
       color-scheme: light;
-      --bg: #f5f3ee;
+      --bg: #f6f4ef;
       --ink: #1b1f23;
       --muted: #65717c;
       --line: #d8d3c8;
@@ -163,6 +169,8 @@ PANEL_HTML = """<!doctype html>
       cursor: pointer;
     }
     button.secondary { background: #2f3b43; }
+    button.danger { background: #9d2f22; }
+    button:disabled { cursor: progress; opacity: .62; }
     .toolbar {
       display: flex;
       align-items: center;
@@ -187,6 +195,31 @@ PANEL_HTML = """<!doctype html>
     }
     th { color: var(--muted); font-size: 12px; font-weight: 700; }
     tr:last-child td { border-bottom: 0; }
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      border-radius: 999px;
+      padding: 3px 9px;
+      background: #e6e0d5;
+      color: #394149;
+      font-weight: 700;
+      font-size: 12px;
+    }
+    .status-pill.running { background: #d8eee7; color: #166047; }
+    .status-pill.starting, .status-pill.stopping { background: #fff0c7; color: #77520b; }
+    .status-pill.crashed, .status-pill.failed { background: #f4d8d2; color: #8d2b1f; }
+    .actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .actions button { min-height: 34px; padding: 7px 10px; }
+    .addr {
+      font-family: Consolas, "Cascadia Mono", monospace;
+      font-size: 13px;
+      white-space: nowrap;
+    }
     .status {
       min-height: 22px;
       margin-top: 14px;
@@ -197,6 +230,7 @@ PANEL_HTML = """<!doctype html>
     @media (max-width: 860px) {
       main { grid-template-columns: 1fr; }
       section { border-right: 0; border-bottom: 1px solid var(--line); }
+      th, td { padding: 9px 8px; }
     }
   </style>
 </head>
@@ -226,7 +260,7 @@ PANEL_HTML = """<!doctype html>
     </section>
     <section>
       <div class="toolbar">
-        <h2>服务器</h2>
+        <h2>已验证服务端</h2>
       </div>
       <table>
         <thead>
@@ -235,8 +269,9 @@ PANEL_HTML = """<!doctype html>
             <th>整合包</th>
             <th>版本</th>
             <th>Loader</th>
-            <th>远程文件</th>
-            <th>待处理</th>
+            <th>连接地址</th>
+            <th>状态</th>
+            <th>操作</th>
           </tr>
         </thead>
         <tbody id="servers"></tbody>
@@ -256,18 +291,59 @@ PANEL_HTML = """<!doctype html>
     }
     async function refresh() {
       const payload = await api("/api/servers");
-      $("servers").innerHTML = payload.servers.map((server) => `
+      const verifiedPrefix = "startup-verification-2026-07-21/";
+      const servers = payload.servers.filter((server) => server.targetName.startsWith(verifiedPrefix));
+      $("servers").innerHTML = servers.map((server) => `
         <tr>
           <td>${server.targetName}</td>
           <td>${server.name}</td>
           <td>${server.minecraftVersion}</td>
           <td>${server.loader}</td>
-          <td>${server.remoteFiles}</td>
-          <td>${server.manualActions}</td>
+          <td><span class="addr">${server.connectAddress}</span></td>
+          <td>
+            <span class="status-pill ${server.runtimeStatus}">${server.runtimeStatus}</span>
+            ${server.pid ? `<div>PID ${server.pid}</div>` : ""}
+          </td>
+          <td>
+            <div class="actions">
+              <button onclick="startServer('${escapeAttr(server.targetName)}')">启动</button>
+              <button class="danger" onclick="stopServer('${escapeAttr(server.targetName)}')">停止</button>
+            </div>
+          </td>
         </tr>
-      `).join("");
+      `).join("") || `<tr><td colspan="7">没有找到 startup-verification-2026-07-21 这批测试服务端。</td></tr>`;
+    }
+    function escapeAttr(value) {
+      return String(value).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+    }
+    async function startServer(targetName) {
+      $("status").textContent = `正在启动 ${targetName}...`;
+      try {
+        const payload = await api("/api/servers/start", {
+          method: "POST",
+          body: JSON.stringify({ targetName })
+        });
+        $("status").textContent = `已发送启动命令：${payload.server.connectAddress}`;
+        await refresh();
+      } catch (error) {
+        $("status").textContent = error.message;
+      }
+    }
+    async function stopServer(targetName) {
+      $("status").textContent = `正在停止 ${targetName}...`;
+      try {
+        await api("/api/servers/stop", {
+          method: "POST",
+          body: JSON.stringify({ targetName })
+        });
+        $("status").textContent = `已发送停止命令：${targetName}`;
+        await refresh();
+      } catch (error) {
+        $("status").textContent = error.message;
+      }
     }
     $("refresh").onclick = refresh;
+    setInterval(() => refresh().catch(() => {}), 5000);
     $("import").onclick = async () => {
       $("status").textContent = "处理中...";
       try {
