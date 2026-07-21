@@ -111,7 +111,7 @@ Prerequisites:
 Run the web panel:
 
 ```powershell
-git clone https://github.com/Ha22yX/Pack2Serve.git
+git clone https://github.com/Ha22yX/MC-Pack2Server.git
 cd Pack2Serve
 python -m pack2serve.cli serve-panel --host 127.0.0.1 --port 8766 --workspace data
 ```

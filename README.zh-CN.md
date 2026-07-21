@@ -111,7 +111,7 @@ Pack2Serve 的目标是生成尽量接近“同一个整合包开多人房间”
 启动网页面板：
 
 ```powershell
-git clone https://github.com/Ha22yX/Pack2Serve.git
+git clone https://github.com/Ha22yX/MC-Pack2Server.git
 cd Pack2Serve
 python -m pack2serve.cli serve-panel --host 127.0.0.1 --port 8766 --workspace data
 ```
