@@ -71,8 +71,6 @@ KNOWN_CLIENT_ONLY_MOD_IDS = {
     "jecharacters",
     "just-zoom",
     "legacyskins",
-    "lan-operators",
-    "lanoperators",
     "mcwifipnp",
     "modmenu",
     "moremusic",
@@ -83,8 +81,6 @@ KNOWN_CLIENT_ONLY_MOD_IDS = {
     "smoothswapping",
     "sodium",
     "sodiumextras",
-    "auto-mod",
-    "auto-operator",
 }
 
 
