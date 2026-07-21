@@ -1579,20 +1579,22 @@ def _online_inventory_from_log(log_path: Path, player: str) -> dict[str, object]
     payload = _empty_inventory_payload()
     if not log_path.exists():
         return payload
-    current_section = "inventory"
+    pending_sections: list[str] = []
     for line in log_path.read_text(encoding="utf-8", errors="replace").splitlines():
         command = re.search(r">\s*data get entity ([A-Za-z0-9_]{1,16}) (Inventory|EnderItems|ArmorItems|HandItems)", line)
         if command and command.group(1) == player:
-            current_section = {
-                "Inventory": "inventory",
-                "EnderItems": "enderChest",
-                "ArmorItems": "armor",
-                "HandItems": "hand",
-            }[command.group(2)]
+            pending_sections.append(_inventory_probe_section(command.group(2)))
+            continue
+        missing = re.search(r"Found no elements matching (Inventory|EnderItems|ArmorItems|HandItems)", line)
+        if missing and pending_sections:
+            section = _inventory_probe_section(missing.group(1))
+            if section in pending_sections:
+                pending_sections.remove(section)
             continue
         entity = re.search(rf": {re.escape(player)} has the following entity data: (\[.+\])", line)
         if not entity:
             continue
+        current_section = pending_sections.pop(0) if pending_sections else "inventory"
         items = parse_snbt_inventory_list(entity.group(1), section=current_section)
         if current_section == "enderChest":
             payload["enderChest"] = [_force_section(item, "enderChest") for item in items]
@@ -1603,6 +1605,15 @@ def _online_inventory_from_log(log_path: Path, player: str) -> dict[str, object]
         else:
             payload["inventory"] = items
     return payload
+
+
+def _inventory_probe_section(field: str) -> str:
+    return {
+        "Inventory": "inventory",
+        "EnderItems": "enderChest",
+        "ArmorItems": "armor",
+        "HandItems": "hand",
+    }[field]
 
 
 def _force_section(item: dict[str, object], section: str) -> dict[str, object]:

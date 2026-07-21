@@ -297,6 +297,33 @@ class Pack2ServeCoreTests(unittest.TestCase):
             self.assertEqual(inventory["inventory"][0]["id"], "minecraft:stone")
             self.assertTrue(str(inventory["inventory"][0]["iconDataUrl"]).startswith("data:image/png;base64,"))
 
+    def test_panel_service_parses_online_inventory_probe_outputs_in_command_order(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            tmp_path = Path(temp)
+            server_dir = tmp_path / "workspace/servers/sample-server"
+            (server_dir / "pack2serve").mkdir(parents=True)
+            (server_dir / "logs").mkdir()
+            _write_minimal_build_report(server_dir, name="Sample Server")
+            (server_dir / "server.properties").write_text("level-name=world\nserver-port=25565\n", encoding="utf-8")
+            (server_dir / "logs/panel-server.log").write_text(
+                "> data get entity kicofy Inventory\n"
+                "> data get entity kicofy EnderItems\n"
+                "> data get entity kicofy ArmorItems\n"
+                "> data get entity kicofy HandItems\n"
+                '[Server thread/INFO]: kicofy has the following entity data: [{Slot:0b,id:"minecraft:stone",count:64}]\n'
+                "[Server thread/INFO]: kicofy has the following entity data: []\n"
+                "[Server thread/INFO]: Found no elements matching ArmorItems\n"
+                "[Server thread/INFO]: Found no elements matching HandItems\n",
+                encoding="utf-8",
+            )
+
+            inventory = PanelService(tmp_path / "workspace").player_inventory("sample-server", "kicofy", source="online")
+
+            self.assertEqual(inventory["status"], "ready")
+            self.assertEqual(inventory["hotbar"][0]["id"], "minecraft:stone")
+            self.assertEqual(inventory["armor"], [])
+            self.assertEqual(inventory["offhand"], [])
+
     def test_panel_service_rejects_inventory_view_for_old_minecraft_versions(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             tmp_path = Path(temp)
@@ -2271,6 +2298,8 @@ class Pack2ServeCoreTests(unittest.TestCase):
         self.assertIn('id="onlinePlayersList"', PANEL_HTML)
         self.assertIn('id="offlinePlayersList"', PANEL_HTML)
         self.assertIn('class="inventory-grid"', PANEL_HTML)
+        self.assertIn('class="hotbar-grid"', PANEL_HTML)
+        self.assertIn('快捷栏', PANEL_HTML)
         self.assertIn('item-tooltip', PANEL_HTML)
         self.assertIn("/api/servers/player-inventory", PANEL_HTML)
 

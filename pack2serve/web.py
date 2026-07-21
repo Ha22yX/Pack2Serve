@@ -635,7 +635,8 @@ PANEL_HTML = r"""<!doctype html>
       box-shadow: inset 0 1px 0 rgb(255 255 255 / .45);
     }
     .equipment-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: start; }
-    .inventory-grid { display: grid; grid-template-columns: repeat(9, 42px); gap: 4px; }
+    .inventory-grid, .hotbar-grid { display: grid; grid-template-columns: repeat(9, 42px); gap: 4px; }
+    .hotbar-grid { margin-top: 8px; padding-top: 8px; border-top: 3px solid #f3f0e6; }
     .equipment-grid { display: grid; grid-template-columns: repeat(5, 42px); gap: 4px; }
     .accessory-grid { display: grid; grid-template-columns: repeat(auto-fill, 42px); gap: 4px; min-height: 42px; }
     .item-slot {
@@ -1372,7 +1373,9 @@ PANEL_HTML = r"""<!doctype html>
           ${renderAccessories(inventory.accessories || [])}
           <div>
             <div class="inventory-title">背包</div>
-            <div class="inventory-grid">${slotGrid(inventory.main || [], 27, "main")}${slotGrid(inventory.hotbar || [], 9, "hotbar")}</div>
+            <div class="inventory-grid">${slotGrid(inventory.main || [], 27, "main")}</div>
+            <div class="inventory-title" style="margin-top:10px">快捷栏</div>
+            <div class="hotbar-grid">${slotGrid(inventory.hotbar || [], 9, "hotbar")}</div>
           </div>
           <div>
             <div class="inventory-title">末影箱</div>
