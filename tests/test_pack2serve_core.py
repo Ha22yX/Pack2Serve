@@ -543,6 +543,7 @@ class Pack2ServeCoreTests(unittest.TestCase):
                     "overrides/config/server.toml": "server=true",
                     "overrides/mods/local.jar": b"jar",
                     "overrides/kubejs/server_scripts/main.js": "ServerEvents.loaded(() => {})",
+                    "overrides/ftbteambases/pregen_initial/region/r.0.0.mca": b"region",
                     "overrides/resources/assets/lycanitesmobs/spawners/global.json": "{}",
                     "overrides/structures/active/tower.rcst": b"structure",
                     "overrides/shaderpacks/client.zip": b"shader",
@@ -557,6 +558,7 @@ class Pack2ServeCoreTests(unittest.TestCase):
             self.assertEqual((target / "config/server.toml").read_text(), "server=true")
             self.assertEqual((target / "mods/local.jar").read_bytes(), b"jar")
             self.assertTrue((target / "kubejs/server_scripts/main.js").exists())
+            self.assertEqual((target / "ftbteambases/pregen_initial/region/r.0.0.mca").read_bytes(), b"region")
             self.assertTrue((target / "resources/assets/lycanitesmobs/spawners/global.json").exists())
             self.assertTrue((target / "structures/active/tower.rcst").exists())
             self.assertTrue((target / "_client-overrides/shaderpacks/client.zip").exists())
@@ -771,6 +773,54 @@ class Pack2ServeCoreTests(unittest.TestCase):
             self.assertFalse((target / "mods/【无缝音乐】moremusic-0.1.4+1.20.1.jar").exists())
             self.assertTrue((target / "_client-overrides/mods/【无缝音乐】moremusic-0.1.4+1.20.1.jar").exists())
             self.assertEqual(report.copied_overrides[-1].classification, "client-remote-isolated")
+
+    def test_server_builder_isolates_known_neoforge_client_only_ui_mods(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            tmp_path = Path(temp)
+            sources = {
+                "collapsible_groups-neoforge-1.21.1-1.2.3.jar": b"collapsible",
+                "drippyloadingscreen_neoforge_3.1.2_MC_1.21.1.jar": b"drippy",
+                "EuphoriaPatcher-1.9.3-r5.8.1-neoforge.jar": b"euphoria",
+            }
+            files = []
+            for filename, content in sources.items():
+                source = tmp_path / filename
+                source.write_bytes(content)
+                files.append(
+                    {
+                        "path": f"mods/{filename}",
+                        "downloads": [source.as_uri()],
+                        "hashes": {"sha1": hashlib.sha1(content).hexdigest()},
+                        "fileSize": len(content),
+                    }
+                )
+            pack = tmp_path / "sample.mrpack"
+            write_zip(
+                pack,
+                {
+                    "modrinth.index.json": json.dumps(
+                        {
+                            "formatVersion": 1,
+                            "game": "minecraft",
+                            "name": "NeoForge Client UI Build",
+                            "versionId": "1.0.0",
+                            "dependencies": {"minecraft": "1.21.1", "neoforge": "21.1.233"},
+                            "files": files,
+                        }
+                    ),
+                },
+            )
+            target = tmp_path / "server"
+
+            report = ServerBuilder(cache_dir=tmp_path / "cache", download_remote=True).build(pack, target)
+
+            for filename in sources:
+                self.assertFalse((target / "mods" / filename).exists())
+                self.assertTrue((target / "_client-overrides/mods" / filename).exists())
+            self.assertEqual(
+                [item.classification for item in report.copied_overrides],
+                ["client-remote-isolated", "client-remote-isolated", "client-remote-isolated"],
+            )
 
     def test_panel_service_imports_pack_and_lists_generated_server(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -2888,6 +2938,77 @@ class Pack2ServeCoreTests(unittest.TestCase):
 
             self.assertEqual(result.status, "crashed")
             self.assertIn("Crash report", result.combined_output)
+
+    def test_server_validator_isolates_invalid_dist_client_mods_and_retries(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            tmp_path = Path(temp)
+            server_dir = tmp_path / "server"
+            mods_dir = server_dir / "mods"
+            pack2serve_dir = server_dir / "pack2serve"
+            mods_dir.mkdir(parents=True)
+            pack2serve_dir.mkdir()
+            client_mod = mods_dir / "drippyloadingscreen_neoforge_3.1.2_MC_1.21.1.jar"
+            client_mod.write_bytes(b"client-ui")
+            (pack2serve_dir / "build-report.json").write_text(
+                json.dumps(
+                    {
+                        "manual_actions": [],
+                        "copied_overrides": [
+                            {
+                                "source": "mods/drippyloadingscreen_neoforge_3.1.2_MC_1.21.1.jar",
+                                "destination": "mods/drippyloadingscreen_neoforge_3.1.2_MC_1.21.1.jar",
+                                "classification": "server-remote-copied",
+                                "size": len(b"client-ui"),
+                            }
+                        ],
+                        "pack": {
+                            "name": "Repair Sample",
+                            "format": "modrinth",
+                            "minecraft_version": "1.21.1",
+                            "loader": {"name": "neoforge", "version": "21.1.233"},
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            fake = tmp_path / "fake_invalid_dist_then_success.py"
+            fake.write_text(
+                "import pathlib, sys\n"
+                "root = pathlib.Path.cwd()\n"
+                "mod = root / 'mods' / 'drippyloadingscreen_neoforge_3.1.2_MC_1.21.1.jar'\n"
+                "if mod.exists():\n"
+                "    crash = root / 'crash-reports' / 'crash-fml.txt'\n"
+                "    crash.parent.mkdir(exist_ok=True)\n"
+                "    crash.write_text('-- Mod loading issue for: drippyloadingscreen --\\n'\n"
+                "                     'Details:\\n'\n"
+                "                     f'\\tMod file: {mod}\\n'\n"
+                "                     '\\tFailure message: Drippy Loading Screen has failed to load correctly\\n'\n"
+                "                     '\\tjava.lang.RuntimeException: Attempted to load class net/minecraft/client/gui/screens/Screen for invalid dist DEDICATED_SERVER\\n', encoding='utf-8')\n"
+                "    print('Crash report saved to crash-reports/crash-fml.txt')\n"
+                "    print('Attempted to load class net/minecraft/client/gui/screens/Screen for invalid dist DEDICATED_SERVER')\n"
+                "    sys.exit(1)\n"
+                "print('Done (0.1s)! For help, type help')\n",
+                encoding="utf-8",
+            )
+
+            result = ServerValidator().validate(
+                server_dir,
+                command=["python", str(fake)],
+                timeout_seconds=10,
+            )
+
+            repaired_mod = server_dir / "_client-overrides/mods/drippyloadingscreen_neoforge_3.1.2_MC_1.21.1.jar"
+            build_report = json.loads((pack2serve_dir / "build-report.json").read_text(encoding="utf-8"))
+            self.assertEqual(result.status, "started")
+            self.assertEqual(result.repair_attempts, 1)
+            self.assertTrue(repaired_mod.exists())
+            self.assertFalse(client_mod.exists())
+            self.assertEqual(
+                build_report["copied_overrides"][0]["destination"],
+                "_client-overrides/mods/drippyloadingscreen_neoforge_3.1.2_MC_1.21.1.jar",
+            )
+            self.assertEqual(build_report["copied_overrides"][0]["classification"], "client-remote-isolated")
+            self.assertTrue((pack2serve_dir / "client-mod-repairs.json").exists())
 
     def test_server_validator_detects_java_exception_even_with_zero_exit(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
