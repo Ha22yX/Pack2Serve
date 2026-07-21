@@ -1020,7 +1020,11 @@ class Pack2ServeCoreTests(unittest.TestCase):
 
             with patch("pack2serve.panel.JavaInstaller") as java_installer_class, patch(
                 "pack2serve.panel.LoaderInstaller"
-            ) as installer_class, patch("pack2serve.panel._is_port_available", return_value=True):
+            ) as installer_class, patch("pack2serve.panel._is_port_available", return_value=True), patch.object(
+                ServerValidator,
+                "validate",
+                return_value=type("ValidationResult", (), {"status": "started", "to_json_dict": lambda self: {}})(),
+            ):
                 java_installer_class.return_value.install.side_effect = install_java
                 installer_class.return_value.install.side_effect = install_loader
                 job = service.create_project(pack, project_name="Job Server", accept_eula=True, download=True)
@@ -1045,6 +1049,115 @@ class Pack2ServeCoreTests(unittest.TestCase):
                 self.assertTrue((tmp_path / "workspace/servers/job-server/pack2serve/runtime/java/bin/java.exe").exists())
                 java_installer_class.return_value.install.assert_called_once()
                 installer_class.return_value.install.assert_called_once()
+
+    def test_panel_service_create_project_auto_validates_before_completion(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            tmp_path = Path(temp)
+            pack = tmp_path / "sample.mrpack"
+            write_zip(
+                pack,
+                {
+                    "modrinth.index.json": json.dumps(
+                        {
+                            "formatVersion": 1,
+                            "game": "minecraft",
+                            "name": "Job Sample",
+                            "versionId": "1.0.0",
+                            "dependencies": {"minecraft": "1.20.1", "fabric-loader": "0.18.4"},
+                            "files": [],
+                        }
+                    ),
+                },
+            )
+            service = PanelService(tmp_path / "workspace", advertise_host="127.0.0.1")
+
+            def install_loader(server_dir: Path, plan: LoaderInstallPlan, *, execute_installers: bool = False):
+                (Path(server_dir) / plan.artifact_path).write_bytes(b"fabric-server")
+                return type("Result", (), {"status": "installed", "to_json_dict": lambda self: {}})()
+
+            def install_java(server_dir: Path, plan: JavaRuntimeInstallPlan):
+                java = Path(server_dir) / plan.java_executable
+                java.parent.mkdir(parents=True, exist_ok=True)
+                java.write_bytes(b"java")
+                return type("Result", (), {"status": "installed", "to_json_dict": lambda self: {}})()
+
+            validation_result = type(
+                "ValidationResult",
+                (),
+                {"status": "started", "to_json_dict": lambda self: {"status": "started"}},
+            )()
+
+            with patch("pack2serve.panel.JavaInstaller") as java_installer_class, patch(
+                "pack2serve.panel.LoaderInstaller"
+            ) as installer_class, patch.object(ServerValidator, "validate", return_value=validation_result) as validate:
+                java_installer_class.return_value.install.side_effect = install_java
+                installer_class.return_value.install.side_effect = install_loader
+                job = service.create_project(pack, project_name="Job Server", accept_eula=True, download=True)
+                deadline = time.time() + 10
+                current = service.project_job(job["jobId"])
+                while current["status"] in {"queued", "running"} and time.time() < deadline:
+                    time.sleep(0.05)
+                    current = service.project_job(job["jobId"])
+
+            self.assertEqual(current["status"], "completed")
+            self.assertEqual(current["stage"], "complete")
+            self.assertTrue(any("验证" in line or "validation" in line.lower() for line in current["logLines"]))
+            validate.assert_called_once()
+            self.assertEqual(Path(validate.call_args.args[0]), tmp_path / "workspace/servers/job-server")
+            self.assertEqual(validate.call_args.kwargs["timeout_seconds"], 300)
+
+    def test_panel_service_create_project_fails_when_auto_validation_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            tmp_path = Path(temp)
+            pack = tmp_path / "sample.mrpack"
+            write_zip(
+                pack,
+                {
+                    "modrinth.index.json": json.dumps(
+                        {
+                            "formatVersion": 1,
+                            "game": "minecraft",
+                            "name": "Job Sample",
+                            "versionId": "1.0.0",
+                            "dependencies": {"minecraft": "1.20.1", "fabric-loader": "0.18.4"},
+                            "files": [],
+                        }
+                    ),
+                },
+            )
+            service = PanelService(tmp_path / "workspace", advertise_host="127.0.0.1")
+
+            def install_loader(server_dir: Path, plan: LoaderInstallPlan, *, execute_installers: bool = False):
+                (Path(server_dir) / plan.artifact_path).write_bytes(b"fabric-server")
+                return type("Result", (), {"status": "installed", "to_json_dict": lambda self: {}})()
+
+            def install_java(server_dir: Path, plan: JavaRuntimeInstallPlan):
+                java = Path(server_dir) / plan.java_executable
+                java.parent.mkdir(parents=True, exist_ok=True)
+                java.write_bytes(b"java")
+                return type("Result", (), {"status": "installed", "to_json_dict": lambda self: {}})()
+
+            validation_result = type(
+                "ValidationResult",
+                (),
+                {"status": "failed", "to_json_dict": lambda self: {"status": "failed", "hints": ["boom"]}},
+            )()
+
+            with patch("pack2serve.panel.JavaInstaller") as java_installer_class, patch(
+                "pack2serve.panel.LoaderInstaller"
+            ) as installer_class, patch.object(ServerValidator, "validate", return_value=validation_result):
+                java_installer_class.return_value.install.side_effect = install_java
+                installer_class.return_value.install.side_effect = install_loader
+                job = service.create_project(pack, project_name="Job Server", accept_eula=True, download=True)
+                deadline = time.time() + 10
+                current = service.project_job(job["jobId"])
+                while current["status"] in {"queued", "running"} and time.time() < deadline:
+                    time.sleep(0.05)
+                    current = service.project_job(job["jobId"])
+
+            self.assertEqual(current["status"], "failed")
+            self.assertEqual(current["stage"], "failed")
+            self.assertIn("Startup validation failed", current["error"])
 
     def test_panel_service_create_project_requires_download_enabled(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -1273,6 +1386,7 @@ class Pack2ServeCoreTests(unittest.TestCase):
         self.assertIn('id="modsList"', PANEL_HTML)
         self.assertIn('id="keySettings"', PANEL_HTML)
         self.assertIn('id="commandSuggestions"', PANEL_HTML)
+        self.assertIn('data-stage="validate"', PANEL_HTML)
         self.assertIn('id="showInternalProjects"', PANEL_HTML)
         self.assertIn('id="detailDelete"', PANEL_HTML)
         self.assertIn('id="packFile"', PANEL_HTML)

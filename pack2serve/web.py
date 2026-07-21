@@ -623,7 +623,8 @@ PANEL_HTML = r"""<!doctype html>
             <div class="stage" data-stage="java"><span>安装 Java 运行时</span><span>56%</span></div>
             <div class="stage" data-stage="loader"><span>安装服务端启动文件</span><span>72%</span></div>
             <div class="stage" data-stage="eula"><span>写入 EULA</span><span>82%</span></div>
-            <div class="stage" data-stage="finalize"><span>生成摘要</span><span>94%</span></div>
+            <div class="stage" data-stage="validate"><span>启动验证</span><span>88%</span></div>
+            <div class="stage" data-stage="finalize"><span>生成摘要</span><span>96%</span></div>
             <div class="stage" data-stage="complete"><span>创建完成</span><span>100%</span></div>
           </div>
         </div>

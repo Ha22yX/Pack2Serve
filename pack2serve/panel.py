@@ -20,6 +20,7 @@ from pack2serve.downloader import ArtifactCache, CurseForgeTemplateMirrorProvide
 from pack2serve.eula import accept_eula as accept_server_eula
 from pack2serve.installer import LoaderInstaller, load_loader_plan
 from pack2serve.java import JavaInstaller, load_java_runtime_install_plan
+from pack2serve.validator import ServerValidator
 
 
 @dataclass
@@ -165,7 +166,14 @@ class PanelService:
             if loader_result.status == "failed":
                 raise RuntimeError("Loader installation failed. Check pack2serve/loader-install-result.json.")
             self._update_job(job_id, stage="eula", progress=82, message="写入 EULA 接受状态")
-            self._update_job(job_id, stage="finalize", progress=94, message="生成项目摘要")
+            self._update_job(job_id, stage="validate", progress=88, message="启动服务端并验证 Done 状态")
+            validation_result = ServerValidator().validate(target, timeout_seconds=300)
+            self._append_job_log(job_id, f"启动验证: {validation_result.status}")
+            if validation_result.status != "started":
+                raise RuntimeError(
+                    "Startup validation failed. Check pack2serve/validation-report.json and logs/pack2serve-validation.log."
+                )
+            self._update_job(job_id, stage="finalize", progress=96, message="生成项目摘要")
             summary = _summary_from_report(target_name, report.to_json_dict())
             summary.update(self.server_runtime_status(target_name))
             with self._lock:
