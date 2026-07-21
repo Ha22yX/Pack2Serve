@@ -46,6 +46,8 @@ class ProjectJob:
     log_lines: list[str] = field(default_factory=list)
     server: dict[str, object] | None = None
     error: str | None = None
+    detail: dict[str, object] = field(default_factory=dict)
+    download: dict[str, object] = field(default_factory=dict)
 
     def to_json_dict(self) -> dict[str, object]:
         return {
@@ -60,6 +62,8 @@ class ProjectJob:
             "logLines": self.log_lines[-120:],
             "server": self.server,
             "error": self.error,
+            "detail": self.detail,
+            "download": self.download,
         }
 
 
@@ -128,6 +132,13 @@ class PanelService:
                 raise ValueError(f"Unknown project job: {job_id}")
             return job.to_json_dict()
 
+    def project_jobs(self) -> list[dict[str, object]]:
+        with self._lock:
+            return [
+                job.to_json_dict()
+                for job in sorted(self._jobs.values(), key=lambda item: item.started_at, reverse=True)
+            ]
+
     def _active_create_job(self, target_name: str) -> ProjectJob | None:
         return next(
             (
@@ -163,7 +174,7 @@ class PanelService:
             providers = self._curseforge_providers(mirrors)
             self._append_job_log(job_id, f"项目目录: {target}")
             self._append_job_log(job_id, f"整合包: {pack_path}")
-            self._update_job(job_id, stage="build", progress=22, message="解析整合包并复制 overrides")
+            self._update_job(job_id, stage="build", progress=16, message="解析整合包结构")
             if self._stop_running_server_for_rebuild(target_name):
                 self._append_job_log(job_id, "Stopped existing server process before rebuild.")
             terminated = _prepare_target_for_build(target)
@@ -173,6 +184,7 @@ class PanelService:
                 cache_dir=self.cache_dir,
                 download_remote=download,
                 curseforge_providers=providers,
+                progress_callback=lambda event: self._handle_build_progress(job_id, event),
             ).build(pack_path, target)
             _write_project_metadata(target, display_name)
             assigned_port = self._assign_server_port(target)
@@ -184,25 +196,25 @@ class PanelService:
                 accept_server_eula(target)
             self._append_job_log(job_id, f"远程文件: {len(report.downloads)}")
             self._append_job_log(job_id, f"人工项: {len(report.manual_actions)}")
-            self._update_job(job_id, stage="java", progress=56, message="安装匹配的 Java 运行时")
+            self._update_job(job_id, stage="java", progress=62, message="安装匹配的 Java 运行时")
             java_plan = load_java_runtime_install_plan(target / "pack2serve" / "java-runtime-install-plan.json")
             java_result = JavaInstaller().install(target, java_plan)
             self._append_job_log(job_id, f"Java 安装: {java_result.status}")
-            self._update_job(job_id, stage="loader", progress=72, message="安装服务端启动文件")
+            self._update_job(job_id, stage="loader", progress=76, message="安装服务端启动文件")
             loader_plan = load_loader_plan(target / "pack2serve" / "loader-install-plan.json")
             loader_result = LoaderInstaller().install(target, loader_plan, execute_installers=True)
             self._append_job_log(job_id, f"Loader 安装: {loader_result.status}")
             if loader_result.status == "failed":
                 raise RuntimeError("Loader installation failed. Check pack2serve/loader-install-result.json.")
-            self._update_job(job_id, stage="eula", progress=82, message="写入 EULA 接受状态")
-            self._update_job(job_id, stage="validate", progress=88, message="启动服务端并验证 Done 状态")
+            self._update_job(job_id, stage="eula", progress=84, message="写入 EULA 接受状态")
+            self._update_job(job_id, stage="validate", progress=90, message="启动服务端并验证 Done 状态")
             validation_result = ServerValidator().validate(target, timeout_seconds=300)
             self._append_job_log(job_id, f"启动验证: {validation_result.status}")
             if validation_result.status != "started":
                 raise RuntimeError(
                     "Startup validation failed. Check pack2serve/validation-report.json and logs/pack2serve-validation.log."
                 )
-            self._update_job(job_id, stage="finalize", progress=96, message="生成项目摘要")
+            self._update_job(job_id, stage="finalize", progress=97, message="生成项目摘要")
             summary = _summary_from_report(target_name, report.to_json_dict())
             summary.update(self.server_runtime_status(target_name))
             with self._lock:
@@ -786,6 +798,56 @@ class PanelService:
         with self._lock:
             self._jobs[job_id].log_lines.append(line)
 
+    def _handle_build_progress(self, job_id: str, event: dict[str, object]) -> None:
+        event_type = str(event.get("type", ""))
+        if event_type == "copy-start":
+            self._update_job(job_id, stage="copy", progress=18, message="复制整合包 overrides")
+            return
+        if event_type == "copy-complete":
+            copied = int(event.get("copied") or 0)
+            self._update_job(job_id, stage="download", progress=24, message=f"overrides 已复制 {copied} 项，准备下载模组")
+            return
+        if event_type == "download-start":
+            total = int(event.get("total") or 0)
+            self._set_job_download(job_id, completed=0, total=total, current="", status="running")
+            message = "没有远程模组需要下载" if total == 0 else f"开始下载远程模组 0/{total}"
+            self._update_job(job_id, stage="download", progress=26, message=message)
+            return
+        if event_type in {"download-item-start", "download-item-complete"}:
+            total = int(event.get("total") or 0)
+            completed = int(event.get("completed") or 0)
+            current = str(event.get("current") or "")
+            self._set_job_download(job_id, completed=completed, total=total, current=current, status="running")
+            progress = _scaled_progress(completed, total, start=26, end=56)
+            message = f"下载远程模组 {completed}/{total}"
+            if current:
+                message += f": {current}"
+            self._update_job(job_id, stage="download", progress=progress, message=message)
+            return
+        if event_type == "download-complete":
+            total = int(event.get("total") or 0)
+            self._set_job_download(job_id, completed=total, total=total, current="", status="completed")
+            self._update_job(job_id, stage="download", progress=56, message=f"远程模组下载完成 {total}/{total}")
+
+    def _set_job_download(
+        self,
+        job_id: str,
+        *,
+        completed: int,
+        total: int,
+        current: str,
+        status: str,
+    ) -> None:
+        percent = 100 if total == 0 else int((completed / total) * 100)
+        with self._lock:
+            self._jobs[job_id].download = {
+                "completed": completed,
+                "total": total,
+                "current": current,
+                "percent": max(0, min(percent, 100)),
+                "status": status,
+            }
+
     def _monitor_process(self, target_name: str, running: RunningServer) -> None:
         stdout = running.process.stdout
         assert stdout is not None
@@ -1001,6 +1063,13 @@ def _next_available_port(start: int, stop: int, used_ports: set[int], *, udp: bo
         if _is_port_available(port, udp=udp):
             return port
     raise RuntimeError(f"No available port found in range {start}-{stop - 1}.")
+
+
+def _scaled_progress(completed: int, total: int, *, start: int, end: int) -> int:
+    if total <= 0:
+        return end
+    ratio = max(0, min(completed / total, 1))
+    return int(start + ((end - start) * ratio))
 
 
 def _is_port_available(port: int, *, udp: bool = False) -> bool:

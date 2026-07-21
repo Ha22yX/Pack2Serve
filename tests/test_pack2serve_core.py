@@ -646,6 +646,55 @@ class Pack2ServeCoreTests(unittest.TestCase):
             self.assertEqual((target / "mods/remote.jar").read_bytes(), b"remote-content")
             self.assertEqual(len(report.manual_actions), 0)
 
+    def test_server_builder_reports_download_progress_events(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            tmp_path = Path(temp)
+            source = tmp_path / "remote.jar"
+            source.write_bytes(b"remote-content")
+            sha1 = hashlib.sha1(source.read_bytes()).hexdigest()
+            pack = tmp_path / "sample.mrpack"
+            write_zip(
+                pack,
+                {
+                    "modrinth.index.json": json.dumps(
+                        {
+                            "formatVersion": 1,
+                            "game": "minecraft",
+                            "name": "Progress Build",
+                            "versionId": "1.0.0",
+                            "dependencies": {"minecraft": "1.20.1", "forge": "47.4.20"},
+                            "files": [
+                                {
+                                    "path": "mods/remote.jar",
+                                    "downloads": [source.as_uri()],
+                                    "hashes": {"sha1": sha1},
+                                    "fileSize": len(b"remote-content"),
+                                }
+                            ],
+                        }
+                    ),
+                },
+            )
+            events: list[dict[str, object]] = []
+
+            ServerBuilder(
+                cache_dir=tmp_path / "cache",
+                download_remote=True,
+                progress_callback=events.append,
+            ).build(pack, tmp_path / "server")
+
+            event_types = [event["type"] for event in events]
+            self.assertIn("copy-start", event_types)
+            self.assertIn("copy-complete", event_types)
+            self.assertIn("download-start", event_types)
+            self.assertIn("download-item-start", event_types)
+            self.assertIn("download-item-complete", event_types)
+            self.assertIn("download-complete", event_types)
+            complete = next(event for event in events if event["type"] == "download-item-complete")
+            self.assertEqual(complete["completed"], 1)
+            self.assertEqual(complete["total"], 1)
+            self.assertEqual(complete["current"], "remote.jar")
+
     def test_server_builder_isolates_modrinth_server_unsupported_remote_files(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             tmp_path = Path(temp)
@@ -1206,6 +1255,38 @@ class Pack2ServeCoreTests(unittest.TestCase):
             self.assertEqual(events[:2], ["prepare", "build"])
             self.assertEqual(service.project_job(job.id)["status"], "completed")
 
+    def test_panel_create_job_tracks_download_progress_details(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            tmp_path = Path(temp)
+            service = PanelService(tmp_path / "workspace", advertise_host="127.0.0.1")
+            job = ProjectJob(id="job", target_name="job-server")
+            service._jobs[job.id] = job
+
+            service._handle_build_progress(
+                job.id,
+                {"type": "download-item-complete", "completed": 12, "total": 90, "current": "example-mod.jar"},
+            )
+            current = service.project_job(job.id)
+
+            self.assertEqual(current["stage"], "download")
+            self.assertEqual(current["download"]["completed"], 12)
+            self.assertEqual(current["download"]["total"], 90)
+            self.assertEqual(current["download"]["current"], "example-mod.jar")
+            self.assertEqual(current["download"]["percent"], 13)
+            self.assertGreater(current["progress"], 26)
+            self.assertLess(current["progress"], 56)
+
+    def test_panel_service_lists_create_jobs_for_refresh_recovery(self) -> None:
+        service = PanelService("workspace", advertise_host="127.0.0.1")
+        older = ProjectJob(id="older", target_name="old-server", started_at=1)
+        newer = ProjectJob(id="newer", target_name="new-server", started_at=2)
+        service._jobs[older.id] = older
+        service._jobs[newer.id] = newer
+
+        jobs = service.project_jobs()
+
+        self.assertEqual([job["jobId"] for job in jobs], ["newer", "older"])
+
     def test_panel_service_create_project_auto_validates_before_completion(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             tmp_path = Path(temp)
@@ -1636,7 +1717,12 @@ class Pack2ServeCoreTests(unittest.TestCase):
         self.assertIn('id="createWorld"', PANEL_HTML)
         self.assertIn('id="keySettings"', PANEL_HTML)
         self.assertIn('id="commandSuggestions"', PANEL_HTML)
+        self.assertIn('id="downloadDetail"', PANEL_HTML)
+        self.assertIn('id="downloadFill"', PANEL_HTML)
+        self.assertIn('id="downloadCurrent"', PANEL_HTML)
         self.assertIn('data-stage="validate"', PANEL_HTML)
+        self.assertIn('data-stage="copy"', PANEL_HTML)
+        self.assertIn('data-stage="download"', PANEL_HTML)
         self.assertIn('id="showInternalProjects"', PANEL_HTML)
         self.assertIn('id="detailDelete"', PANEL_HTML)
         self.assertIn('id="packFile"', PANEL_HTML)
@@ -1649,6 +1735,8 @@ class Pack2ServeCoreTests(unittest.TestCase):
         self.assertIn("localStorage.setItem(ACTIVE_JOB_STORAGE_KEY, jobId)", PANEL_HTML)
         self.assertIn("localStorage.getItem(ACTIVE_JOB_STORAGE_KEY)", PANEL_HTML)
         self.assertIn("localStorage.removeItem(ACTIVE_JOB_STORAGE_KEY)", PANEL_HTML)
+        self.assertIn("renderDownloadProgress(job.download || {})", PANEL_HTML)
+        self.assertIn('api("/api/projects/jobs")', PANEL_HTML)
         self.assertIn('type="file"', PANEL_HTML)
         self.assertIn("/api/projects/upload", PANEL_HTML)
         self.assertIn("/api/servers/delete", PANEL_HTML)

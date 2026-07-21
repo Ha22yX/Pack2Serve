@@ -36,7 +36,11 @@ def serve(host: str = "127.0.0.1", port: int = 8765, workspace_dir: str | Path =
                     self._send_json({"servers": service.list_servers(include_internal=include_internal)})
                     return
                 if route == "/api/projects/jobs":
-                    self._send_json({"job": service.project_job(query.get("jobId", [""])[0])})
+                    job_id = query.get("jobId", [""])[0]
+                    if job_id:
+                        self._send_json({"job": service.project_job(job_id)})
+                    else:
+                        self._send_json({"jobs": service.project_jobs()})
                     return
                 if route == "/api/servers/logs":
                     target_name = query.get("targetName", [""])[0]
@@ -553,6 +557,18 @@ PANEL_HTML = r"""<!doctype html>
     }
     .progress-track { height: 10px; background: #e4e1d7; border-radius: 999px; overflow: hidden; }
     .progress-fill { height: 100%; width: 0; background: var(--accent); transition: width .25s ease; }
+    .download-detail {
+      display: grid;
+      gap: 6px;
+      margin-top: 12px;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #f7f5ee;
+    }
+    .download-detail .progress-track { height: 8px; }
+    .download-meta { display: flex; justify-content: space-between; gap: 12px; font-size: 12px; color: var(--muted); }
+    .download-current { font: 12px Consolas, "Cascadia Mono", monospace; color: #30362f; overflow-wrap: anywhere; }
     .stage-list { display: grid; gap: 8px; margin-top: 12px; }
     .stage { display: flex; justify-content: space-between; color: var(--muted); font-size: 13px; }
     .stage.current { color: var(--ink); font-weight: 760; }
@@ -729,14 +745,21 @@ PANEL_HTML = r"""<!doctype html>
             <span class="pill starting" id="jobStage">queued</span>
           </div>
           <div class="progress-track"><div class="progress-fill" id="jobFill"></div></div>
+          <div class="download-detail hidden" id="downloadDetail">
+            <div class="download-meta"><span id="downloadCount">下载 0/0</span><span id="downloadPercent">0%</span></div>
+            <div class="progress-track"><div class="progress-fill" id="downloadFill"></div></div>
+            <div class="download-current" id="downloadCurrent"></div>
+          </div>
           <div class="stage-list">
             <div class="stage" data-stage="inspect"><span>读取整合包</span><span>08%</span></div>
-            <div class="stage" data-stage="build"><span>解析与复制</span><span>22%</span></div>
-            <div class="stage" data-stage="java"><span>安装 Java 运行时</span><span>56%</span></div>
-            <div class="stage" data-stage="loader"><span>安装服务端启动文件</span><span>72%</span></div>
-            <div class="stage" data-stage="eula"><span>写入 EULA</span><span>82%</span></div>
-            <div class="stage" data-stage="validate"><span>启动验证</span><span>88%</span></div>
-            <div class="stage" data-stage="finalize"><span>生成摘要</span><span>96%</span></div>
+            <div class="stage" data-stage="build"><span>解析整合包</span><span>16%</span></div>
+            <div class="stage" data-stage="copy"><span>复制配置资源</span><span>18%</span></div>
+            <div class="stage" data-stage="download"><span>下载模组文件</span><span>26-56%</span></div>
+            <div class="stage" data-stage="java"><span>安装 Java 运行时</span><span>62%</span></div>
+            <div class="stage" data-stage="loader"><span>安装服务端启动文件</span><span>76%</span></div>
+            <div class="stage" data-stage="eula"><span>写入 EULA</span><span>84%</span></div>
+            <div class="stage" data-stage="validate"><span>启动验证</span><span>90%</span></div>
+            <div class="stage" data-stage="finalize"><span>生成摘要</span><span>97%</span></div>
             <div class="stage" data-stage="complete"><span>创建完成</span><span>100%</span></div>
           </div>
         </div>
@@ -1419,9 +1442,15 @@ PANEL_HTML = r"""<!doctype html>
       state.jobTimer = null;
     }
 
-    function restoreActiveJob() {
+    async function restoreActiveJob() {
       const savedJobId = localStorage.getItem(ACTIVE_JOB_STORAGE_KEY);
-      if (savedJobId) watchJob(savedJobId);
+      if (savedJobId) {
+        watchJob(savedJobId);
+        return;
+      }
+      const payload = await api("/api/projects/jobs");
+      const active = payload.jobs.find((job) => ["queued", "running"].includes(job.status));
+      if (active) watchJob(active.jobId);
     }
 
     async function pollJob() {
@@ -1440,6 +1469,7 @@ PANEL_HTML = r"""<!doctype html>
       $("jobMessage").textContent = job.message;
       $("jobStage").textContent = job.stage;
       $("jobFill").style.width = `${job.progress}%`;
+      renderDownloadProgress(job.download || {});
       document.querySelectorAll(".stage").forEach((stage) => stage.classList.toggle("current", stage.dataset.stage === job.stage));
       if (job.status === "completed" || job.status === "failed") {
         clearActiveJob();
@@ -1447,6 +1477,19 @@ PANEL_HTML = r"""<!doctype html>
         await refresh();
         if (job.status === "completed" && job.server) openProject(job.server.targetName);
       }
+    }
+
+    function renderDownloadProgress(download) {
+      const total = Number(download.total || 0);
+      const completed = Number(download.completed || 0);
+      const percent = Number(download.percent || 0);
+      const visible = total > 0 || download.status === "running";
+      $("downloadDetail").classList.toggle("hidden", !visible);
+      if (!visible) return;
+      $("downloadCount").textContent = `下载 ${completed}/${total}`;
+      $("downloadPercent").textContent = `${percent}%`;
+      $("downloadFill").style.width = `${percent}%`;
+      $("downloadCurrent").textContent = download.current ? `当前：${download.current}` : "等待下载任务";
     }
 
     function formatBytes(value) {
@@ -1502,7 +1545,7 @@ PANEL_HTML = r"""<!doctype html>
     setInterval(() => loadFiles().catch(() => {}), 8000);
     updateCreateButton();
     if (!location.hash) location.hash = HOME_ROUTE;
-    restoreActiveJob();
+    restoreActiveJob().catch((error) => toast(error.message));
     refresh().catch((error) => toast(error.message));
   </script>
   <script type="application/json" id="legacyPanelScript">

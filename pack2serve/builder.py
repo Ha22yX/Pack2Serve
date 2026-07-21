@@ -4,6 +4,7 @@ import json
 import shutil
 import zipfile
 from pathlib import Path, PurePosixPath
+from typing import Callable
 
 from pack2serve.downloader import (
     ArtifactCache,
@@ -90,10 +91,12 @@ class ServerBuilder:
         cache_dir: str | Path = "data/cache",
         download_remote: bool = False,
         curseforge_providers: list[CurseForgeTemplateMirrorProvider] | None = None,
+        progress_callback: Callable[[dict[str, object]], None] | None = None,
     ):
         self.cache_dir = Path(cache_dir)
         self.download_remote = download_remote
         self.curseforge_providers = curseforge_providers or []
+        self.progress_callback = progress_callback
 
     def build(self, pack_path: str | Path, target_dir: str | Path) -> BuildReport:
         pack = parse_modpack(pack_path)
@@ -109,10 +112,13 @@ class ServerBuilder:
         manual_actions: list[ManualAction] = []
         curseforge_resolution: CurseForgeResolutionSummary | None = None
 
+        self._progress({"type": "copy-start", "message": "复制 overrides"})
         with zipfile.ZipFile(pack.source_path) as archive:
             require_safe_zip(archive)
             copied = self._copy_overrides(archive, pack.override_root, target)
+        self._progress({"type": "copy-complete", "copied": len(copied), "message": f"已复制 {len(copied)} 个 overrides 条目"})
 
+        self._progress({"type": "download-start", "total": len(pack.remote_files), "completed": 0})
         if pack.format == ModpackFormat.CURSEFORGE:
             curseforge_actions, curseforge_resolution, curseforge_copied = self._resolve_curseforge_files(
                 pack.remote_files, target
@@ -123,6 +129,7 @@ class ServerBuilder:
             remote_actions, remote_copied = self._resolve_remote_files(pack.format, pack.remote_files, target)
             manual_actions.extend(remote_actions)
             copied.extend(remote_copied)
+        self._progress({"type": "download-complete", "total": len(pack.remote_files), "completed": len(pack.remote_files)})
 
         report = BuildReport(
             pack=pack,
@@ -137,6 +144,10 @@ class ServerBuilder:
         audit_generated_server(report.target_dir)
         return report
 
+    def _progress(self, event: dict[str, object]) -> None:
+        if self.progress_callback:
+            self.progress_callback(event)
+
     def _resolve_remote_files(
         self, pack_format: ModpackFormat, remote_files: list[RemoteFile], target: Path
     ) -> tuple[list[ManualAction], list[CopiedOverride]]:
@@ -146,7 +157,16 @@ class ServerBuilder:
         provider = ModrinthDirectProvider(ArtifactCache(self.cache_dir))
         actions: list[ManualAction] = []
         copied: list[CopiedOverride] = []
-        for remote in remote_files:
+        total = len(remote_files)
+        for index, remote in enumerate(remote_files, start=1):
+            self._progress(
+                {
+                    "type": "download-item-start",
+                    "completed": index - 1,
+                    "total": total,
+                    "current": _remote_progress_name(remote),
+                }
+            )
             try:
                 artifact = provider.resolve_and_cache(remote)
                 destination, classification = self._remote_destination(remote, target)
@@ -168,6 +188,15 @@ class ServerBuilder:
                         details={"targetPath": remote.target_path, "provider": remote.provider},
                     )
                 )
+            finally:
+                self._progress(
+                    {
+                        "type": "download-item-complete",
+                        "completed": index,
+                        "total": total,
+                        "current": _remote_progress_name(remote),
+                    }
+                )
         return actions, copied
 
     def _resolve_curseforge_files(
@@ -182,7 +211,16 @@ class ServerBuilder:
         resolver = CurseForgeResolver(ArtifactCache(self.cache_dir), providers)
         provider_counts: dict[str, int] = {}
         resolved_count = 0
-        for remote in remote_files:
+        total = len(remote_files)
+        for index, remote in enumerate(remote_files, start=1):
+            self._progress(
+                {
+                    "type": "download-item-start",
+                    "completed": index - 1,
+                    "total": total,
+                    "current": _remote_progress_name(remote),
+                }
+            )
             try:
                 artifact = resolver.resolve_and_cache(remote)
                 destination, classification = self._curseforge_destination(remote, artifact.path.name, target)
@@ -214,6 +252,15 @@ class ServerBuilder:
                             "providerErrors": exc.provider_errors,
                         },
                     )
+                )
+            finally:
+                self._progress(
+                    {
+                        "type": "download-item-complete",
+                        "completed": index,
+                        "total": total,
+                        "current": _remote_progress_name(remote),
+                    }
                 )
         return actions, CurseForgeResolutionSummary(
             resolved=resolved_count,
@@ -340,6 +387,18 @@ class ServerBuilder:
 
 def _remote_to_dict(remote: object) -> dict[str, object]:
     return dict(remote.__dict__)
+
+
+def _remote_progress_name(remote: RemoteFile) -> str:
+    if remote.display_name:
+        return remote.display_name
+    if remote.slug:
+        return remote.slug
+    if remote.target_path:
+        return Path(remote.target_path).name or remote.target_path
+    if remote.project_id and remote.file_id:
+        return f"{remote.project_id}/{remote.file_id}"
+    return remote.provider or "remote file"
 
 
 def _matches_client_only_mod(value: str) -> bool:
