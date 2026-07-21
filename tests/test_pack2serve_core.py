@@ -1,6 +1,8 @@
+import gzip
 import json
 import hashlib
 import os
+import struct
 import tempfile
 import time
 import unittest
@@ -11,6 +13,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from pack2serve import panel as panel_module
+from pack2serve.assets import resolve_item_icon_data_url
 from pack2serve.builder import ServerBuilder
 from pack2serve.cli import main
 from pack2serve.compatibility import audit_generated_server
@@ -22,6 +25,7 @@ from pack2serve.java import (
     java_status,
     required_java_major,
 )
+from pack2serve.inventory import minecraft_supports_inventory_view, parse_snbt_inventory_list, read_playerdata_inventory
 from pack2serve.loader import LoaderInstallPlan, create_loader_install_plan
 from pack2serve.installer import LoaderInstaller, ensure_start_script_uses_nogui
 from pack2serve.panel import PanelService, ProjectJob, RunningServer
@@ -43,6 +47,32 @@ def write_zip(path: Path, files: dict[str, str | bytes]) -> None:
     with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as archive:
         for name, content in files.items():
             archive.writestr(name, content)
+
+
+def write_playerdata_nbt(path: Path) -> None:
+    def name(value: str) -> bytes:
+        encoded = value.encode("utf-8")
+        return struct.pack(">H", len(encoded)) + encoded
+
+    def string_payload(value: str) -> bytes:
+        encoded = value.encode("utf-8")
+        return struct.pack(">H", len(encoded)) + encoded
+
+    def item(slot: int, item_id: str, count: int) -> bytes:
+        return (
+            b"\x01" + name("Slot") + struct.pack(">b", slot)
+            + b"\x08" + name("id") + string_payload(item_id)
+            + b"\x01" + name("Count") + struct.pack(">b", count)
+            + b"\x00"
+        )
+
+    payload = (
+        b"\x0a" + name("")
+        + b"\x09" + name("Inventory") + b"\x0a" + struct.pack(">i", 1) + item(0, "minecraft:stone", 64)
+        + b"\x09" + name("EnderItems") + b"\x0a" + struct.pack(">i", 1) + item(5, "minecraft:diamond", 3)
+        + b"\x00"
+    )
+    path.write_bytes(gzip.compress(payload))
 
 
 def _write_minimal_build_report(server_dir: Path, *, name: str) -> None:
@@ -71,6 +101,57 @@ def _write_minimal_build_report(server_dir: Path, *, name: str) -> None:
 
 
 class Pack2ServeCoreTests(unittest.TestCase):
+    def test_inventory_view_supports_only_minecraft_1_13_and_newer(self) -> None:
+        self.assertFalse(minecraft_supports_inventory_view("1.12.2"))
+        self.assertTrue(minecraft_supports_inventory_view("1.13"))
+        self.assertTrue(minecraft_supports_inventory_view("1.20.1"))
+        self.assertTrue(minecraft_supports_inventory_view("1.21.1"))
+
+    def test_parse_snbt_inventory_list_normalizes_items(self) -> None:
+        items = parse_snbt_inventory_list(
+            '[{Slot:0b,id:"minecraft:stone",Count:64b},{Slot:100b,id:"minecraft:diamond_helmet",count:1}]',
+            section="inventory",
+        )
+
+        self.assertEqual(items[0]["slot"], 0)
+        self.assertEqual(items[0]["section"], "hotbar")
+        self.assertEqual(items[0]["id"], "minecraft:stone")
+        self.assertEqual(items[0]["count"], 64)
+        self.assertIn("minecraft:stone", items[0]["tooltip"])
+        self.assertEqual(items[1]["section"], "armor")
+
+    def test_read_playerdata_inventory_reads_gzip_nbt_items(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            playerdata = Path(temp) / "player.dat"
+            write_playerdata_nbt(playerdata)
+
+            inventory = read_playerdata_inventory(playerdata)
+
+            self.assertEqual(inventory["inventory"][0]["id"], "minecraft:stone")
+            self.assertEqual(inventory["inventory"][0]["count"], 64)
+            self.assertEqual(inventory["enderChest"][0]["id"], "minecraft:diamond")
+            self.assertEqual(inventory["enderChest"][0]["section"], "enderChest")
+
+    def test_resolve_item_icon_data_url_reads_mod_item_model_texture(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            server_dir = Path(temp) / "server"
+            mods_dir = server_dir / "mods"
+            mods_dir.mkdir(parents=True)
+            write_zip(
+                mods_dir / "example.jar",
+                {
+                    "assets/example/models/item/ring.json": json.dumps(
+                        {"parent": "item/generated", "textures": {"layer0": "example:item/ring"}}
+                    ),
+                    "assets/example/textures/item/ring.png": b"\x89PNG\r\n\x1a\nicon",
+                },
+            )
+
+            icon = resolve_item_icon_data_url(server_dir, "example:ring")
+
+            self.assertIsNotNone(icon)
+            self.assertTrue(str(icon).startswith("data:image/png;base64,"))
+
     def test_parse_modrinth_mrpack_reads_dependencies_and_files(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             tmp_path = Path(temp)
