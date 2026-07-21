@@ -1,7 +1,7 @@
 <h1 align="center">Pack2Serve</h1>
 
 <p align="center">
-  A local Python web panel for turning Minecraft modpacks into dedicated server projects, then running and managing them from one place.
+  Import a Minecraft modpack file, generate a ready-to-run dedicated server folder, and start hosting from the browser. In the fastest local path, Pack2Serve can go from only a modpack archive to a running server in about 2 minutes.
 </p>
 
 <p align="center">
@@ -61,13 +61,15 @@
 
 ## Why This Exists
 
-Minecraft modpacks are easy to launch as a client profile, but converting that same pack into a dedicated server is still awkward: remote mod files need to be resolved, client-only files need to be separated, loader installers need to run, Java versions need to match, EULA must be explicit, and startup failures need readable logs.
+Minecraft modpacks are easy to launch as a client profile, but turning that same `.mrpack` or CurseForge exported `.zip` into a dedicated server folder is still awkward: remote mod files need to be resolved, client-only files need to be separated, loader installers need to run, Java versions need to match, EULA must be explicit, and startup failures need readable logs.
 
-Pack2Serve is built for local server hosts who want a panel-driven flow:
+Pack2Serve is built for local server hosts who want a panel-driven flow from a single modpack file to a playable server:
 
-1. Choose a `.mrpack` or CurseForge exported `.zip`.
-2. Let the builder parse the pack, download resolvable remote files, copy server resources, install Java and loader assets, write EULA only after consent, and run startup validation.
-3. Manage the generated server project from a browser.
+1. Choose a `.mrpack` or CurseForge exported `.zip` directly in the web panel.
+2. Click once to parse the pack, download resolvable remote files, copy server resources, install Java and loader assets, write EULA only after consent, and run startup validation.
+3. Get a generated server project folder, start the server from the project card, and manage logs, players, worlds, mods, files, and settings from the browser.
+
+For small packs or already cached dependencies, the fastest path is roughly 2 minutes from "I only have the modpack file" to "the server is running." Larger packs still depend on download speed, loader installation, and startup validation time.
 
 ## Features
 
@@ -129,11 +131,11 @@ http://127.0.0.1:8766/
 ## Panel Workflow
 
 1. Click `创建项目`.
-2. Select a `.mrpack` or CurseForge `.zip` file directly.
+2. Select a `.mrpack` or CurseForge `.zip` modpack file directly.
 3. Enter the project name.
 4. Confirm that you have read and accepted the Minecraft EULA and allow Pack2Serve to download resolvable remote mod files.
-5. Wait for parsing, downloads, Java setup, loader setup, EULA writing, startup validation, and summary generation.
-6. Open the project card to start the server and manage logs, players, worlds, mods, files, and settings.
+5. Wait for Pack2Serve to generate the server folder: parsing, downloads, Java setup, loader setup, EULA writing, startup validation, and summary generation are shown in the build progress.
+6. Open the project card, click start, copy the connection address, and manage logs, players, worlds, mods, files, and settings from the same panel.
 
 ## CLI Usage
 
