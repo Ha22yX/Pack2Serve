@@ -261,8 +261,13 @@ def serve(host: str = "127.0.0.1", port: int = 8765, workspace_dir: str | Path =
             self.wfile.write(body)
 
     server = ThreadingHTTPServer((host, port), Pack2ServeHandler)
+    service.cleanup_stale_server_processes()
     print(f"Pack2Serve panel listening on http://{host}:{server.server_port}")
-    server.serve_forever()
+    try:
+        server.serve_forever()
+    finally:
+        service.shutdown()
+        server.server_close()
 
 
 def main(argv: list[str] | None = None) -> int:

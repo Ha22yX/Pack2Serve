@@ -241,10 +241,7 @@ class PanelService:
         if not self.servers_dir.exists():
             return []
         servers: list[dict[str, object]] = []
-        for report_path in sorted(self.servers_dir.glob("**/pack2serve/build-report.json")):
-            data = json.loads(report_path.read_text(encoding="utf-8"))
-            server_dir = report_path.parents[1]
-            target_name = server_dir.relative_to(self.servers_dir).as_posix()
+        for target_name, server_dir, data in self._generated_server_reports():
             metadata = _read_project_metadata(server_dir)
             internal_project = _project_internal_status(target_name, metadata)
             if internal_project and not include_internal:
@@ -254,6 +251,37 @@ class PanelService:
             summary.update(self.server_runtime_status(target_name))
             servers.append(summary)
         return servers
+
+    def cleanup_stale_server_processes(self) -> dict[str, object]:
+        terminated: dict[str, list[int]] = {}
+        for target_name, server_dir, _data in self._generated_server_reports():
+            with self._lock:
+                running = self._running.get(target_name)
+                if running and running.process.poll() is None:
+                    continue
+            process_ids = _terminate_external_processes_for_path(server_dir.resolve())
+            if process_ids:
+                terminated[target_name] = process_ids
+        return {
+            "terminatedProcesses": terminated,
+            "count": sum(len(process_ids) for process_ids in terminated.values()),
+        }
+
+    def shutdown(self) -> dict[str, object]:
+        with self._lock:
+            target_names = list(self._running.keys())
+        stopped: dict[str, object] = {}
+        for target_name in target_names:
+            try:
+                stopped[target_name] = self.stop_server(target_name)
+            except Exception as exc:
+                stopped[target_name] = {"error": str(exc)}
+        stale = self.cleanup_stale_server_processes()
+        return {
+            "stoppedServers": stopped,
+            "terminatedProcesses": stale["terminatedProcesses"],
+            "count": stale["count"],
+        }
 
     def start_server(self, target_name: str) -> dict[str, object]:
         server_dir = self._server_dir(target_name)
@@ -879,6 +907,17 @@ class PanelService:
             stdout.close()
             if running.process.stdin:
                 running.process.stdin.close()
+
+    def _generated_server_reports(self) -> list[tuple[str, Path, dict[str, object]]]:
+        if not self.servers_dir.exists():
+            return []
+        reports: list[tuple[str, Path, dict[str, object]]] = []
+        for report_path in sorted(self.servers_dir.glob("**/pack2serve/build-report.json")):
+            data = json.loads(report_path.read_text(encoding="utf-8"))
+            server_dir = report_path.parents[1]
+            target_name = server_dir.relative_to(self.servers_dir).as_posix()
+            reports.append((target_name, server_dir, data))
+        return reports
 
 
 _KEY_SERVER_SETTINGS: dict[str, dict[str, object]] = {

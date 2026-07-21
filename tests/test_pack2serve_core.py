@@ -7,7 +7,7 @@ import zipfile
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from pack2serve import panel as panel_module
 from pack2serve.builder import ServerBuilder
@@ -34,6 +34,7 @@ from pack2serve.web import (
     _safe_upload_name,
     _uploaded_project_name,
     _validate_upload_length,
+    serve,
 )
 
 
@@ -972,6 +973,66 @@ class Pack2ServeCoreTests(unittest.TestCase):
             self.assertEqual(status["runtimeStatus"], "stopped")
             terminate.assert_called_once_with(server_dir.resolve())
 
+    def test_panel_service_cleanup_stale_server_processes_terminates_generated_projects(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            tmp_path = Path(temp)
+            first = tmp_path / "workspace/servers/first-server"
+            second = tmp_path / "workspace/servers/second-server"
+            first.joinpath("pack2serve").mkdir(parents=True)
+            second.joinpath("pack2serve").mkdir(parents=True)
+            _write_minimal_build_report(first, name="First")
+            _write_minimal_build_report(second, name="Second")
+
+            service = PanelService(tmp_path / "workspace", advertise_host="127.0.0.1")
+            with patch("pack2serve.panel._terminate_external_processes_for_path", side_effect=[[1111], [2222, 3333]]) as terminate:
+                result = service.cleanup_stale_server_processes()
+
+            self.assertEqual(
+                result,
+                {
+                    "terminatedProcesses": {
+                        "first-server": [1111],
+                        "second-server": [2222, 3333],
+                    },
+                    "count": 3,
+                },
+            )
+            terminate.assert_any_call(first.resolve())
+            terminate.assert_any_call(second.resolve())
+
+    def test_panel_service_shutdown_stops_running_servers(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            tmp_path = Path(temp)
+            server_dir = tmp_path / "workspace/servers/sample-server"
+            (server_dir / "pack2serve").mkdir(parents=True)
+            (server_dir / "server.properties").write_text("server-port=25655\n", encoding="utf-8")
+            _write_minimal_build_report(server_dir, name="Runnable Sample")
+            fake_server = tmp_path / "fake_server.py"
+            fake_server.write_text(
+                "import sys\n"
+                "print('Done (0.1s)! For help, type \"help\"', flush=True)\n"
+                "for line in sys.stdin:\n"
+                "    if line.strip() == 'stop':\n"
+                "        print('Stopping server', flush=True)\n"
+                "        break\n",
+                encoding="utf-8",
+            )
+            (server_dir / "start.ps1").write_text(f"& python '{fake_server}'\n", encoding="utf-8")
+
+            service = PanelService(tmp_path / "workspace", advertise_host="127.0.0.1")
+            service.start_server("sample-server")
+            deadline = time.time() + 10
+            status = service.server_runtime_status("sample-server")
+            while status["runtimeStatus"] != "running" and time.time() < deadline:
+                time.sleep(0.05)
+                status = service.server_runtime_status("sample-server")
+
+            result = service.shutdown()
+            stopped = service.server_runtime_status("sample-server")
+
+            self.assertEqual(result["stoppedServers"]["sample-server"]["runtimeStatus"], "stopped")
+            self.assertEqual(stopped["runtimeStatus"], "stopped")
+
     def test_external_process_lookup_includes_session_lock_owners(self) -> None:
         with patch("pack2serve.panel._world_session_lock_path", return_value=Path("session.lock")), patch(
             "pack2serve.panel._find_processes_locking_file", return_value=[4321]
@@ -1785,6 +1846,29 @@ class Pack2ServeCoreTests(unittest.TestCase):
         self.assertIn("background-image:", PANEL_HTML)
         self.assertNotIn('id="packPath"', PANEL_HTML)
         self.assertNotIn('id="mirrors"', PANEL_HTML)
+
+    def test_panel_web_lifecycle_cleans_stale_processes_and_shutdowns_on_exit(self) -> None:
+        service = Mock()
+
+        class FakeHTTPServer:
+            def __init__(self, address, handler):
+                self.server_port = address[1]
+                self.server_closed = False
+
+            def serve_forever(self) -> None:
+                raise KeyboardInterrupt
+
+            def server_close(self) -> None:
+                self.server_closed = True
+
+        with patch("pack2serve.web.PanelService", return_value=service), patch(
+            "pack2serve.web.ThreadingHTTPServer", FakeHTTPServer
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                serve("127.0.0.1", 8766, Path("data"))
+
+        service.cleanup_stale_server_processes.assert_called_once_with()
+        service.shutdown.assert_called_once_with()
 
     def test_panel_home_project_cards_show_start_stop_and_copy_address_actions(self) -> None:
         card_template = PANEL_HTML.split("function cardTemplate(server)", 1)[1].split("function openProject", 1)[0]
