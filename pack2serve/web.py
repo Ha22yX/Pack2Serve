@@ -102,6 +102,9 @@ def serve(host: str = "127.0.0.1", port: int = 8765, workspace_dir: str | Path =
                 if route == "/api/servers/stop":
                     self._send_json({"server": service.stop_server(payload["targetName"])})
                     return
+                if route == "/api/servers/delete":
+                    self._send_json({"result": service.delete_project(payload["targetName"])})
+                    return
                 if route == "/api/servers/command":
                     self._send_json({"result": service.send_console_command(payload["targetName"], payload["command"])})
                     return
@@ -540,6 +543,7 @@ PANEL_HTML = r"""<!doctype html>
           <div class="card-actions">
             <button class="primary" id="detailStart">启动</button>
             <button class="danger" id="detailStop">停止</button>
+            <button class="danger" id="detailDelete">删除</button>
           </div>
         </div>
         <div class="detail-layout">
@@ -663,6 +667,7 @@ PANEL_HTML = r"""<!doctype html>
           <button class="primary" onclick="event.stopPropagation(); runAction(() => startServer('${escapeAttr(server.targetName)}'))">启动</button>
           <button class="secondary" onclick="event.stopPropagation(); openProject('${escapeAttr(server.targetName)}')">详情</button>
           <button class="danger" onclick="event.stopPropagation(); runAction(() => stopServer('${escapeAttr(server.targetName)}'))">停止</button>
+          <button class="danger" onclick="event.stopPropagation(); runAction(() => deleteProject('${escapeAttr(server.targetName)}'))">删除</button>
         </div>
       </article>`;
     }
@@ -724,6 +729,23 @@ PANEL_HTML = r"""<!doctype html>
         body: JSON.stringify({ targetName })
       });
       toast("已发送停止命令");
+      await refresh();
+    }
+
+    async function deleteProject(targetName, displayName = "") {
+      const server = state.servers.find((item) => item.targetName === targetName);
+      const label = displayName || server?.name || targetName;
+      if (!confirm(`确定删除项目“${label}”？这会停止服务器并删除整个项目目录。`)) return;
+      await api("/api/servers/delete", {
+        method: "POST",
+        body: JSON.stringify({ targetName })
+      });
+      toast(`已删除项目: ${label}`);
+      if (state.selected?.targetName === targetName) {
+        $("detailView").classList.add("hidden");
+        $("homeView").classList.remove("hidden");
+        state.selected = null;
+      }
       await refresh();
     }
 
@@ -869,6 +891,7 @@ PANEL_HTML = r"""<!doctype html>
     };
     $("detailStart").onclick = () => state.selected && runAction(() => startServer(state.selected.targetName));
     $("detailStop").onclick = () => state.selected && runAction(() => stopServer(state.selected.targetName));
+    $("detailDelete").onclick = () => state.selected && runAction(() => deleteProject(state.selected.targetName, state.selected.name));
     $("sendCommand").onclick = () => runAction(sendCommand);
     $("consoleCommand").addEventListener("keydown", (event) => {
       if (event.key === "Enter") runAction(sendCommand);

@@ -901,7 +901,7 @@ class Pack2ServeCoreTests(unittest.TestCase):
 
             with patch("pack2serve.panel.JavaInstaller") as java_installer_class, patch(
                 "pack2serve.panel.LoaderInstaller"
-            ) as installer_class:
+            ) as installer_class, patch("pack2serve.panel._is_port_available", return_value=True):
                 java_installer_class.return_value.install.side_effect = install_java
                 installer_class.return_value.install.side_effect = install_loader
                 job = service.create_project(pack, project_name="Job Server", accept_eula=True, download=False)
@@ -948,6 +948,34 @@ class Pack2ServeCoreTests(unittest.TestCase):
             self.assertEqual([player["name"] for player in players["players"]], ["Bob"])
             self.assertEqual(players["players"][0]["gameMode"], "unknown")
 
+    def test_panel_service_deletes_project_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            tmp_path = Path(temp)
+            server_dir = tmp_path / "workspace/servers/sample-server"
+            (server_dir / "pack2serve").mkdir(parents=True)
+            (server_dir / "server.properties").write_text("server-port=25655\n", encoding="utf-8")
+            _write_minimal_build_report(server_dir, name="Sample Server")
+            service = PanelService(tmp_path / "workspace", advertise_host="127.0.0.1")
+
+            result = service.delete_project("sample-server")
+
+            self.assertEqual(result["targetName"], "sample-server")
+            self.assertEqual(result["status"], "deleted")
+            self.assertFalse(server_dir.exists())
+            self.assertEqual(service.list_servers(), [])
+
+    def test_panel_service_delete_rejects_path_traversal(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            tmp_path = Path(temp)
+            outside = tmp_path / "outside"
+            outside.mkdir()
+            service = PanelService(tmp_path / "workspace", advertise_host="127.0.0.1")
+
+            with self.assertRaises(ValueError):
+                service.delete_project("../outside")
+
+            self.assertTrue(outside.exists())
+
     def test_panel_html_preserves_javascript_backslash_escaping(self) -> None:
         self.assertIn('replace(/\\\\/g, "\\\\\\\\")', PANEL_HTML)
         self.assertNotIn("replace(/\\/g, \"\\\\\")", PANEL_HTML)
@@ -956,9 +984,11 @@ class Pack2ServeCoreTests(unittest.TestCase):
         self.assertIn('id="createDialog"', PANEL_HTML)
         self.assertIn('id="consoleCommand"', PANEL_HTML)
         self.assertIn('id="showInternalProjects"', PANEL_HTML)
+        self.assertIn('id="detailDelete"', PANEL_HTML)
         self.assertIn('id="packFile"', PANEL_HTML)
         self.assertIn('type="file"', PANEL_HTML)
         self.assertIn("/api/projects/upload", PANEL_HTML)
+        self.assertIn("/api/servers/delete", PANEL_HTML)
         self.assertNotIn('id="packPath"', PANEL_HTML)
         self.assertNotIn('id="mirrors"', PANEL_HTML)
 

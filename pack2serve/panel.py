@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import socket
 import subprocess
 import threading
@@ -255,6 +256,26 @@ class PanelService:
             running.status = "stopped"
         return self.server_runtime_status(target_name)
 
+    def delete_project(self, target_name: str) -> dict[str, object]:
+        server_dir = self._server_dir(target_name)
+        with self._lock:
+            running = self._running.get(target_name)
+            is_running = bool(running and running.process.poll() is None)
+        if is_running:
+            self.stop_server(target_name)
+        root = self.servers_dir.resolve()
+        resolved = server_dir.resolve()
+        if root not in resolved.parents:
+            raise ValueError("Invalid server target name.")
+        shutil.rmtree(resolved)
+        with self._lock:
+            self._running.pop(target_name, None)
+        return {
+            "targetName": target_name,
+            "target": str(server_dir),
+            "status": "deleted",
+        }
+
     def server_runtime_status(self, target_name: str) -> dict[str, object]:
         server_dir = self._server_dir(target_name)
         port = _read_server_port(server_dir)
@@ -418,8 +439,10 @@ class PanelService:
         return providers
 
     def _server_dir(self, target_name: str) -> Path:
+        if not target_name.strip():
+            raise ValueError("Invalid server target name.")
         relative = Path(target_name.replace("\\", "/"))
-        if relative.is_absolute() or any(part == ".." for part in relative.parts):
+        if relative == Path(".") or relative.is_absolute() or any(part == ".." for part in relative.parts):
             raise ValueError("Invalid server target name.")
         server_dir = (self.servers_dir / relative).resolve()
         root = self.servers_dir.resolve()
