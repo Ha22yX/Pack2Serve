@@ -1394,6 +1394,37 @@ class Pack2ServeCoreTests(unittest.TestCase):
             self.assertFalse(server_dir.exists())
             self.assertEqual(service.list_servers(), [])
 
+    def test_panel_service_delete_terminates_external_processes_for_project_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            tmp_path = Path(temp)
+            server_dir = tmp_path / "workspace/servers/sample-server"
+            (server_dir / "pack2serve").mkdir(parents=True)
+            (server_dir / "server.properties").write_text("server-port=25655\n", encoding="utf-8")
+            _write_minimal_build_report(server_dir, name="Sample Server")
+            service = PanelService(tmp_path / "workspace", advertise_host="127.0.0.1")
+
+            with patch("pack2serve.panel._terminate_external_processes_for_path", return_value=[1234]) as terminate:
+                result = service.delete_project("sample-server")
+
+            terminate.assert_called_once_with(server_dir.resolve())
+            self.assertEqual(result["terminatedProcesses"], [1234])
+            self.assertFalse(server_dir.exists())
+
+    def test_panel_service_delete_reports_locked_project_after_retries(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            tmp_path = Path(temp)
+            server_dir = tmp_path / "workspace/servers/sample-server"
+            (server_dir / "pack2serve").mkdir(parents=True)
+            (server_dir / "server.properties").write_text("server-port=25655\n", encoding="utf-8")
+            _write_minimal_build_report(server_dir, name="Sample Server")
+            service = PanelService(tmp_path / "workspace", advertise_host="127.0.0.1")
+
+            with patch("pack2serve.panel.shutil.rmtree", side_effect=PermissionError("locked")):
+                with self.assertRaisesRegex(ValueError, "still locked"):
+                    service.delete_project("sample-server")
+
+            self.assertTrue(server_dir.exists())
+
     def test_panel_service_delete_rejects_path_traversal(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             tmp_path = Path(temp)

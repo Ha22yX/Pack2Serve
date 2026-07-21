@@ -281,13 +281,15 @@ class PanelService:
         resolved = server_dir.resolve()
         if root not in resolved.parents:
             raise ValueError("Invalid server target name.")
-        shutil.rmtree(resolved)
+        terminated_processes = _terminate_external_processes_for_path(resolved)
+        _remove_tree_with_retries(resolved)
         with self._lock:
             self._running.pop(target_name, None)
         return {
             "targetName": target_name,
             "target": str(server_dir),
             "status": "deleted",
+            "terminatedProcesses": terminated_processes,
         }
 
     def server_runtime_status(self, target_name: str) -> dict[str, object]:
@@ -1267,6 +1269,62 @@ def _read_compatibility_summary(server_dir: Path) -> dict[str, object]:
         "serverEquivalent": bool(data.get("serverEquivalent", False)),
         "summary": data.get("summary", {}),
     }
+
+
+def _remove_tree_with_retries(path: Path, *, attempts: int = 6, delay_seconds: float = 0.5) -> None:
+    last_error: OSError | None = None
+    for attempt in range(attempts):
+        try:
+            shutil.rmtree(path)
+            return
+        except OSError as exc:
+            last_error = exc
+            if attempt == attempts - 1:
+                break
+            time.sleep(delay_seconds)
+    raise ValueError(f"Project directory is still locked by another process: {path}. Last error: {last_error}") from last_error
+
+
+def _terminate_external_processes_for_path(project_dir: Path) -> list[int]:
+    if os.name != "nt":
+        return []
+    target = str(project_dir)
+    script = (
+        f"$target = {json.dumps(target)}; "
+        "$own = $PID; "
+        "Get-CimInstance Win32_Process | "
+        "Where-Object { $_.CommandLine -and $_.ProcessId -ne $own -and "
+        "$_.CommandLine.IndexOf($target, [StringComparison]::OrdinalIgnoreCase) -ge 0 } | "
+        "ForEach-Object { $_.ProcessId }"
+    )
+    try:
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", script],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    process_ids: list[int] = []
+    for line in result.stdout.splitlines():
+        raw = line.strip()
+        if raw.isdigit():
+            pid = int(raw)
+            if pid != os.getpid() and pid not in process_ids:
+                process_ids.append(pid)
+    for pid in process_ids:
+        subprocess.run(
+            ["taskkill", "/PID", str(pid), "/T", "/F"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+    return process_ids
 
 
 def _kill_process_tree(proc: subprocess.Popen[str]) -> None:
